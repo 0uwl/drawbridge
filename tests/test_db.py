@@ -1,7 +1,9 @@
+import multiprocessing
+
 from sqlalchemy import text
 
 from drawbridge import create_app
-from drawbridge.db import _database_url, get_session
+from drawbridge.db import _database_url, _is_sqlite, get_session
 from drawbridge.models import Setting, User
 
 
@@ -119,3 +121,64 @@ def test_database_url_wraps_a_bare_filesystem_path():
 def test_database_url_passes_through_an_existing_url():
     url = 'postgresql://user:pass@host/dbname'
     assert _database_url(url) == url
+
+
+def test_is_sqlite_true_for_a_bare_filesystem_path():
+    assert _is_sqlite('/tmp/drawbridge.db') is True
+
+
+def test_is_sqlite_false_for_a_postgres_url():
+    assert _is_sqlite('postgresql+psycopg://user:pass@host/dbname') is False
+
+
+def _bootstrap_worker(database_path, files_path, barrier, result_queue):
+    """multiprocessing.Process target — module-level so it's usable
+    regardless of start method. Calls create_app() directly (bypassing
+    gunicorn.conf.py's worker-count enforcement entirely) so this test
+    verifies the bootstrap lock itself, not the belt-and-suspenders
+    single-worker constraint layered on top of it.
+    """
+    barrier.wait()  # align all processes' entry into init_db() as tightly as possible
+    create_app({
+        'TESTING': True,
+        'DATABASE_PATH': database_path,
+        'FILES_PATH': files_path,
+    })
+    result_queue.put(True)
+
+
+def test_concurrent_first_run_bootstraps_exactly_once(tmp_path):
+    """Reproduces the race in docs/kea-hook-findings.md #5: several real OS
+    processes (not threads — the race is between processes, per Gunicorn's
+    post-fork model) racing init_db() against one fresh DATABASE_PATH.
+    Asserts the fcntl-based bootstrap lock in drawbridge/db.py serializes
+    them so exactly one admin user and one of each seeded Setting survive,
+    and no worker crashes.
+    """
+    database_path = str(tmp_path / 'drawbridge.db')
+    files_path = str(tmp_path / 'files')
+    process_count = 4
+
+    barrier = multiprocessing.Barrier(process_count)
+    result_queue = multiprocessing.Queue()
+
+    processes = [
+        multiprocessing.Process(
+            target=_bootstrap_worker,
+            args=(database_path, files_path, barrier, result_queue),
+        )
+        for _ in range(process_count)
+    ]
+    for p in processes:
+        p.start()
+    for p in processes:
+        p.join(timeout=30)
+
+    assert all(p.exitcode == 0 for p in processes)
+    assert result_queue.qsize() == process_count
+
+    app = create_app({'TESTING': True, 'DATABASE_PATH': database_path, 'FILES_PATH': files_path})
+    with app.app_context():
+        session = get_session()
+        assert session.query(User).filter_by(username='admin').count() == 1
+        assert session.query(Setting).filter_by(key='log_retention_days').count() == 1

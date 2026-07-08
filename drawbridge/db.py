@@ -1,9 +1,11 @@
+import fcntl
 import secrets
 import string
+from contextlib import contextmanager
 from pathlib import Path
 
 from flask import current_app, g
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 from werkzeug.security import generate_password_hash
 
@@ -11,6 +13,11 @@ from drawbridge.models import Base, Setting, User
 
 ADMIN_USERNAME = 'admin'
 ADMIN_PASSWORD_LENGTH = 12
+
+# Arbitrary but fixed pg_advisory_lock key for the bootstrap critical
+# section below — any future second advisory lock should pick a different
+# constant rather than collide with this one.
+_BOOTSTRAP_LOCK_KEY = 835_217_004
 
 
 def init_db(app):
@@ -25,20 +32,71 @@ def init_db(app):
     app.extensions['db_engine'] = engine
     app.extensions['db_session_factory'] = session_factory
 
-    is_first_run = _is_first_run(engine, app.config['DATABASE_PATH'])
-
-    Base.metadata.create_all(engine)
-
-    with session_factory() as session:
-        _seed_log_retention(session, app)
-        _seed_default_image(session, app)
-        _seed_default_config_file(session, app)
-        _seed_default_script(session, app)
-        if is_first_run:
-            _bootstrap_admin(session)
-        session.commit()
+    _bootstrap_once(app, engine, session_factory)
 
     app.teardown_appcontext(_close_session)
+
+
+def _bootstrap_once(app, engine, session_factory):
+    """Schema creation + seeding + admin bootstrap, serialized across
+    processes so exactly one of them ever does the first-run work — see
+    docs/kea-hook-findings.md #5 for the multi-worker race this replaces.
+    The locking primitive differs by dialect; the sequence inside it
+    doesn't. is_first_run is checked *inside* the lock, not before it —
+    otherwise two Postgres workers could both observe an empty database
+    before either has created it, recreating the same race on a different
+    dialect.
+    """
+    if engine.dialect.name == 'sqlite':
+        lock = _sqlite_lock(app.config['DATABASE_PATH'])
+    else:
+        lock = _postgres_lock(engine)
+
+    with lock:
+        is_first_run = _is_first_run(engine, app.config['DATABASE_PATH'])
+
+        Base.metadata.create_all(engine)
+
+        with session_factory() as session:
+            _seed_log_retention(session, app)
+            _seed_default_image(session, app)
+            _seed_default_config_file(session, app)
+            _seed_default_script(session, app)
+            if is_first_run:
+                _bootstrap_admin(session)
+            session.commit()
+
+
+@contextmanager
+def _sqlite_lock(database_path: str):
+    """fcntl.flock advisory lock on a sidecar file next to the database.
+    The lock file's own existence/content carries no state — it's purely a
+    mutex handle — so an operator deleting DATABASE_PATH to reset a dev
+    database doesn't need to also delete the lock file; the next run will
+    see the missing database and re-bootstrap normally.
+    """
+    lock_path = database_path + '.bootstrap-lock'
+    with open(lock_path, 'w') as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _postgres_lock(engine):
+    """pg_advisory_lock/unlock on a dedicated connection, not the
+    sessionmaker — the lock is scoped to one physical backend connection
+    (not a transaction), so it must be taken and released on a connection
+    that isn't handed back to the pool for other work in between.
+    """
+    with engine.connect() as connection:
+        connection.execute(text('SELECT pg_advisory_lock(:key)'), {'key': _BOOTSTRAP_LOCK_KEY})
+        try:
+            yield
+        finally:
+            connection.execute(text('SELECT pg_advisory_unlock(:key)'), {'key': _BOOTSTRAP_LOCK_KEY})
 
 
 def get_session() -> Session:
@@ -77,12 +135,19 @@ def _create_engine(app):
     return engine
 
 
+def _is_sqlite(database_path: str) -> bool:
+    """True for a bare filesystem path (the default) or an explicit
+    sqlite:// URL; False for any other SQLAlchemy URL (e.g. a
+    postgresql://... one). Same '://' sniff as _database_url(), factored
+    out so gunicorn.conf.py can use it without duplicating the logic.
+    """
+    return '://' not in database_path or database_path.startswith('sqlite')
+
+
 def _database_url(database_path: str) -> str:
-    """DATABASE_PATH is a bare filesystem path for alpha's SQLite-only
-    deployment, wrapped into a sqlite:/// URL here. A value that's already
-    a SQLAlchemy URL (e.g. a future postgresql://...) is passed through
-    unchanged — full Postgres support is out of scope for alpha, but
-    nothing in this module needs to change to add it later.
+    """DATABASE_PATH is a bare filesystem path by default, wrapped into a
+    sqlite:/// URL here. A value that's already a SQLAlchemy URL (e.g.
+    postgresql+psycopg://...) is passed through unchanged.
     """
     if '://' in database_path:
         return database_path
@@ -91,17 +156,13 @@ def _database_url(database_path: str) -> str:
 
 def _is_first_run(engine, database_path: str) -> bool:
     """Whether this is the first time init_db has run against this
-    database — gates the admin bootstrap. Per the resolved decision in
-    alpha.md, detected via absence of the SQLite file at DATABASE_PATH
-    before create_all() runs, not an env var or CLI flag.
+    database — gates the admin bootstrap. Must be called while holding the
+    bootstrap lock (see _bootstrap_once) so concurrent workers don't all
+    observe "empty" before any of them has created the schema.
     """
-    if engine.dialect.name != 'sqlite':
-        # Not reachable in alpha (no non-sqlite driver in requirements.txt).
-        # A future Postgres backend needs its own first-run signal here —
-        # e.g. inspect(engine).has_table('users') before create_all(),
-        # which works for both dialects and wouldn't need a file to check.
-        return False
-    return not Path(database_path).exists()
+    if engine.dialect.name == 'sqlite':
+        return not Path(database_path).exists()
+    return not inspect(engine).has_table('users')
 
 
 def _seed_log_retention(session, app):
