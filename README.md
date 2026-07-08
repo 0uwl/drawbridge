@@ -11,8 +11,10 @@ incompatible with a fully airgapped deployment. Drawbridge takes a third
 path: it hardens classic ZTP using infrastructure the organization already
 controls.
 
-- Kea DHCP pre-authorisation gate (lease withheld until Drawbridge approves)
-- Serial number / client-id allowlisting
+- Script-side provisioning gate (device phones home with its own serial
+  before any real provisioning happens; unregistered devices get nothing
+  beyond a normal DHCP lease and the generic script)
+- Serial number allowlisting
 - HTTPS script delivery with server certificate validation inside the script
 - SHA-256 hash verification of images and config payloads
 
@@ -25,11 +27,11 @@ provisioning, then dropped in favor of a retention-bounded provisioning log.
 | Topic | Covers |
 |---|---|
 | [Architecture](docs/architecture.md) | What this is, why not sZTP, system diagram, DHCP flow, repo layout |
-| [Web API](docs/api.md) | Flask endpoints, the `/api/lease-event` contract, auth requirements |
+| [Web API](docs/api.md) | Flask endpoints, the `/api/provision-request` contract, auth requirements |
 | [Database](docs/database.md) | SQLAlchemy schema, multi-worker SQLite concurrency, log retention |
 | [Authentication](docs/authentication.md) | Flask-Login, password hashing, planned SAML SP integration |
 | [Frontend](docs/frontend.md) | Vue/Vite admin UI, dev-server proxy workflow, how it's baked into the container |
-| [Kea Configuration](docs/kea.md) | Control Agent, DHCPv4 config, the `leases4_committed` hook |
+| [Kea Configuration](docs/kea.md) | Control Agent, vanilla DHCPv4 config — no custom hook |
 | [Deployment](docs/deployment.md) | Containerfile, Quadlet, dev setup, environment variables |
 | [Testing](docs/testing.md) | Testing approach and key cases |
 | [Decisions & Constraints](docs/decisions.md) | Design tradeoffs and the reasoning behind each |

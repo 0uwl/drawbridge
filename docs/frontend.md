@@ -86,7 +86,7 @@ def serve_frontend(path):
   still works once client-side routing is added.
 - This route is registered last in `create_app()`, but registration order
   doesn't actually matter: Werkzeug sorts routes by specificity, so a
-  literal/blueprint route like `/api/lease-event` always matches ahead of
+  literal/blueprint route like `/api/provision-request` always matches ahead of
   the `/<path:path>` catch-all regardless of where each is added.
 - If `drawbridge/static/` doesn't exist (frontend never built — the normal
   state during backend-only local dev, see below), requests here 404. That's

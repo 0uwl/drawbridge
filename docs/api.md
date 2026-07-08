@@ -8,7 +8,7 @@
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/lease-event` | Called by Kea hook; approves or denies lease |
+| GET | `/api/provision-request` | Called by the ZTP script's phone-home step on boot; approves or denies provisioning |
 | GET | `/api/devices` | List devices currently pending provisioning |
 | POST | `/api/devices` | Register a new device (serial + optional metadata) |
 | DELETE | `/api/devices/<serial>` | Remove a device from the allowlist |
@@ -27,7 +27,7 @@
 | POST | `/files/scripts` | Upload a ZTP script (auth required) |
 | GET | `/files/scripts/<filename>` | Download a ZTP script — unauthenticated, served to devices during ZTP |
 | DELETE | `/files/scripts/<filename>` | Delete a ZTP script (auth required) |
-| PUT | `/api/provision-complete` | Device reports provisioning outcome; deletes the `devices` row, writes a `ProvisioningLog` row. POST is also accepted for testing/debugging. |
+| PUT | `/api/provision-complete` | Device reports provisioning outcome; deletes the `ProvisioningSession` row, writes a `ProvisioningLog` row. The `devices` allowlist row is untouched. POST is also accepted for testing/debugging. |
 | GET | `/api/log` | List provisioning log entries (time, image, config file, outcome) within the retention window |
 | POST | `/api/auth/login` | Local username/password login, starts session |
 | POST | `/api/auth/logout` | Ends the current session |
@@ -46,33 +46,30 @@ Every `/api/devices`, `/api/log`, `/api/users`, `/api/settings/*`, and
 requires an authenticated session — see [authentication.md](authentication.md).
 `GET /files/<type>/<filename>` download endpoints are unauthenticated so that
 IOS XE devices can fetch images, configs, and scripts during ZTP without
-credentials; access is restricted at the network level (provisioning VLAN). `/api/lease-event` and
-`/api/provision-complete` are called by Kea/devices, not operators.
-`/api/auth/claim` is also unauthenticated by necessity — a newly created
-account has no password yet — but only succeeds against a local account that
-has never been claimed; see [authentication.md](authentication.md). The
-primary security boundary is network isolation (provisioning VLAN/loopback —
-see [architecture.md](architecture.md)). `/api/lease-event` additionally
-enforces origin-based access control via the `kea_endpoint` decorator:
-loopback callers are always allowed; non-loopback callers require a Bearer
-token matching `KEA_HOOK_API_KEY` unless `KEA_SKIP_AUTH` is set. See
-[deployment.md](deployment.md) for configuration.
+credentials; access is restricted at the network level (provisioning VLAN).
+`/api/provision-request` and `/api/provision-complete` are both open routes
+called by devices, not operators — gated by the serial lookup itself (and,
+at the perimeter, network isolation), not by caller identity. There is no
+secret an anonymous, unregistered device could hold, so no auth decorator
+applies to either route; see [decisions.md](decisions.md) for the
+reasoning and the explicitly-accepted serial-enumeration non-goal.
 
-## `/api/lease-event` contract
+## `/api/provision-request` contract
 
-Kea's hook POSTs JSON:
-```json
-{
-  "serial": "FJC2517X0AB",
-  "mac": "aa:bb:cc:dd:ee:ff",
-  "ip": "192.168.100.15"
-}
+Called by the ZTP script (`scripts/ztp-base.py`) as its first action after
+fetching the script — a plain `GET` with query-string params, not a JSON
+POST body, since IOS XE's `copy` primitive (the only network I/O available
+from Guestshell — see [decisions.md](decisions.md), "C9200CX network stack
+isolation") can't attach a request body:
+
+```
+GET /api/v1/provision-request?serial=FJC2517X0AB&mac=aa:bb:cc:dd:ee:ff
 ```
 
-Response must be fast (< 2 s — Kea's park timeout). Return:
-- `200 OK` → Kea sends DHCPACK
-- Any non-200 → Kea drops the packet (fail closed)
-
-On approval, this endpoint also calls Kea's Control Agent to confirm the
-reservation exists. On error reaching Kea Control Agent, fail closed (return
-non-200) rather than partially approving.
+`mac` is optional (audit/logging only, not used for lookup — the script
+always knows its own real serial via `show version`, so no serial/MAC
+fallback matching is needed here). Responses:
+- `200 OK` → known serial; payload is the `Device` record (image, config
+  file, script to fetch next); a `ProvisioningSession` row is created
+- `404 device_not_found` → unknown serial; script exits, does not proceed
+- `422 missing_parameter` → `serial` missing from the query string

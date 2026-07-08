@@ -1,9 +1,12 @@
 # Database
 
-Managed via SQLAlchemy ORM models in `drawbridge/models.py`, against the same
-SQLite file at `DATABASE_PATH`. `drawbridge/db.py` owns the `Engine`/
-`sessionmaker` and an `init_db(app)` that calls `Base.metadata.create_all()`
-on first run.
+Managed via SQLAlchemy ORM models in `drawbridge/models.py`. `drawbridge/db.py`
+owns the `Engine`/`sessionmaker` and an `init_db(app)` that calls
+`Base.metadata.create_all()` on first run. `DATABASE_PATH` is a bare
+filesystem path by default (SQLite), or a full SQLAlchemy URL such as
+`postgresql+psycopg://user:pass@host/dbname` to use PostgreSQL instead — see
+"Concurrency under multiple Gunicorn workers" below for what that choice
+affects.
 
 ## Schema
 
@@ -26,8 +29,9 @@ class Device(Base):
 
 class ProvisioningSession(Base):
     """Transient record of an in-progress ZTP run. Created when
-    /api/lease-event approves a serial; deleted when /api/provision-complete
-    fires (success or failure). The Device allowlist row is not touched."""
+    /api/provision-request approves a serial; deleted when
+    /api/provision-complete fires (success or failure). The Device
+    allowlist row is not touched."""
     __tablename__ = 'provisioning_sessions'
 
     serial: Mapped[str] = mapped_column(primary_key=True)
@@ -103,58 +107,74 @@ work, so that adding SAML later (see [authentication.md](authentication.md))
 is additive — no migration to widen the `users` table when it happens.
 
 A request-scoped session is opened per Flask request (e.g. via
-`app.teardown_appcontext`) and closed/rolled back at the end of the request,
-not held across the `/api/lease-event` call's Kea Control Agent round trip.
+`app.teardown_appcontext`) and closed/rolled back at the end of the request.
 
 ## Concurrency under multiple Gunicorn workers
 
-`gunicorn.conf.py` runs `workers = 4` with the `gevent` worker class — four
-separate OS processes, each handling many greenlets, all opening connections
-to the same `drawbridge.db` file. SQLite allows only one writer at a time
-regardless of journal mode, so the goal is to make workers wait their turn
-safely instead of failing or corrupting state:
+Drawbridge supports two database backends (`DATABASE_PATH`, see above).
+Which one is configured decides how multi-worker concurrency is handled —
+see [decisions.md](decisions.md) for why SQLite is forced single-worker
+rather than the whole app being migrated to Postgres.
+
+### SQLite (default)
+
+`gunicorn.conf.py` forces `workers = 1` whenever `DATABASE_PATH` resolves to
+SQLite. This is what makes a single worker process the actual, enforced
+multi-*worker* concurrency story for SQLite — not WAL or `busy_timeout`,
+which only matter for the greenlet-level concurrency *within* that one
+process:
 
 - `PRAGMA journal_mode=WAL` is set on every new connection (a SQLAlchemy
   `connect` event listener in `drawbridge/db.py`). WAL lets readers proceed
-  without blocking on the one in-progress writer — the default rollback
-  journal mode blocks readers too, which would stall `/api/devices` GETs
-  behind a slow write from another worker.
-- `PRAGMA busy_timeout=<SQLITE_BUSY_TIMEOUT_MS>` is set on every connection.
-  Instead of raising `database is locked` immediately when another worker
-  holds the write lock, SQLite retries internally up to the timeout. Default
-  is `1000`ms — deliberately well under `LEASE_EVENT_TIMEOUT`'s 2 s, leaving
-  headroom for the Kea Control Agent round trip rather than spending the
-  whole park budget on lock contention.
-- Application code still wraps write paths (`/api/lease-event` approval,
-  `/api/devices` POST/DELETE, provisioning-event inserts) with a small
-  bounded retry on `sqlite3.OperationalError: database is locked` — WAL and
-  `busy_timeout` make lock waits the common case, not eliminate the
-  possibility of exhausting the timeout under heavy contention.
+  without blocking on the one in-progress writer — relevant because the
+  `gevent` worker class runs many greenlets inside that single process, all
+  opening connections to the same `drawbridge.db` file.
+- `PRAGMA busy_timeout=<SQLITE_BUSY_TIMEOUT_MS>` is set on every connection
+  so a greenlet retries internally for a short window instead of raising
+  `database is locked` immediately when another greenlet in the same
+  process holds the write lock. Default is `1000`ms.
 - The SQLAlchemy `Engine` is created inside `create_app()`, i.e. after
-  Gunicorn forks each worker — not at module import time. A `sqlite3`
-  connection shared across a `fork()` corrupts the database; each of the 4
-  worker processes must get its own `Engine`/connection pool. `connect_args`
+  Gunicorn forks the worker — not at module import time. A `sqlite3`
+  connection shared across a `fork()` corrupts the database. `connect_args`
   includes `check_same_thread=False` since gevent can hand a checked-out
-  connection between greenlets within one process.
+  connection between greenlets within the one process.
 - WAL mode requires the database file on a local filesystem — true here
   (bind-mounted host directory on the same Ubuntu host), not network
   storage. WAL also produces `drawbridge.db-wal` and `drawbridge.db-shm`
   alongside the main file; any backup tooling must capture all three, not
   just `drawbridge.db`.
-- Keep request-scoped transactions short (already required above) — the
-  longer a writer holds the lock, the longer the other 3 workers sit inside
-  their `busy_timeout`.
+- First-run schema creation + seeding + admin bootstrap is serialized by an
+  `fcntl.flock`-based advisory lock (`drawbridge/db.py`'s `_bootstrap_once`)
+  on a `DATABASE_PATH + '.bootstrap-lock'` sidecar file. With `workers = 1`
+  enforced, only one process is ever inside it — the lock is unconditionally
+  sufficient, not a race mitigation. (This replaces an earlier, genuinely
+  reproducing Gunicorn multi-worker bootstrap race — see
+  [kea-hook-findings.md](kea-hook-findings.md) #5.)
 
-See [decisions.md](decisions.md) for why WAL + busy_timeout was chosen over
-moving to a client/server database.
+### PostgreSQL (opt-in)
+
+Setting `DATABASE_PATH` to a `postgresql+psycopg://...` URL allows multiple
+workers (`WORKERS` env var, default `4`) — ordinary write concurrency is
+Postgres's normal MVCC/row-locking, so none of the SQLite-specific pragmas
+above apply (`_create_engine()` skips them for any non-SQLite dialect). The
+same first-run critical section is serialized with a `pg_advisory_lock`/
+`pg_advisory_unlock` pair instead of a file lock — same structure as the
+SQLite path, a different underlying primitive.
+
+**Coverage note:** the Postgres branch is structurally parallel to the
+tested SQLite path but isn't itself exercised by the test suite (no live
+Postgres server in CI) — see [testing.md](testing.md).
 
 ## Log Retention & Data Minimisation
 
-Drawbridge is not an inventory system — `devices` rows (serial, MAC) are
+Drawbridge is not an inventory system in spirit, though the `Device`
+allowlist row itself persists until an operator explicitly deletes it (see
+the `Device` docstring above). What's transient is the `ProvisioningSession`,
 deleted as soon as `/api/provision-complete` fires (see
-[architecture.md](architecture.md), DHCP Flow step 9). What persists is
-`ProvisioningLog`: when a device was provisioned and what image/config file
-it received, for audit and troubleshooting, not asset tracking.
+[architecture.md](architecture.md), DHCP Flow). What persists past that
+point is `ProvisioningLog`: when a device was provisioned and what
+image/config file it received, for audit and troubleshooting, not asset
+tracking.
 
 - Retention is controlled by the `Setting` row keyed `log_retention_days` —
   an **admin-configurable, DB-backed setting** via `GET`/`PUT

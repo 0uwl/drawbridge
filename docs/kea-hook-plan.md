@@ -1,3 +1,13 @@
+**Part A and Part B are superseded.** The DHCP-level Kea hook gate
+described here was abandoned in favor of a script-level gate — see
+[decisions.md](decisions.md) ("Provisioning gate moved from DHCP-level to
+script-level"). Kept for reference; Part A's native-hook design, the
+`unpark()`/DROP bug, and Part B's `host_cmds`+Postgres requirement remain
+accurate Kea behavior even though this plan is no longer being
+implemented. **Part C (pluggable SQLite/PostgreSQL for Drawbridge's own
+database) is unaffected and has been implemented** — see
+[database.md](database.md).
+
 # Step 6 revised: Kea hook fix + Kea's own PostgreSQL + Drawbridge single-worker
 
 Implementation plan for alpha.md step 6, revised after the investigation in

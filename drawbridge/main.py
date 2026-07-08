@@ -12,11 +12,6 @@ API_VERSION=1
 API_PREFIX=f'/api/v{API_VERSION}'
 DATABASE_PATH = '/app/data/drawbridge.db'
 FILES_PATH = '/app/files'
-KEA_CTRL_URL = 'http://keahost:8081'
-KEA_SUBNET_ID = '1'
-KEA_HOOK_API_KEY = None
-KEA_SKIP_AUTH = False
-LEASE_EVENT_TIMEOUT = '2'
 LOG_LEVEL = 'INFO'
 SQLITE_BUSY_TIMEOUT_MS = '1000'
 LOG_RETENTION_DAYS = '30'
@@ -40,15 +35,10 @@ def create_app(config_dict: dict = {}):
     # Configuration (env vars per docs/deployment.md, overridable via config_dict for tests)
     app.config['DATABASE_PATH'] = os.getenv('DATABASE_PATH', DATABASE_PATH)
     app.config['FILES_PATH'] = os.getenv('FILES_PATH', FILES_PATH)
-    app.config['KEA_CTRL_URL'] = os.getenv('KEA_CTRL_URL', KEA_CTRL_URL)
-    app.config['KEA_SUBNET_ID'] = os.getenv('KEA_SUBNET_ID', KEA_SUBNET_ID)
-    app.config['LEASE_EVENT_TIMEOUT'] = float(os.getenv('LEASE_EVENT_TIMEOUT', LEASE_EVENT_TIMEOUT))
     app.config['LOG_LEVEL'] = os.getenv('LOG_LEVEL', LOG_LEVEL)
     app.config['TESTING'] = os.getenv('TESTING', False)
     app.config['SQLITE_BUSY_TIMEOUT_MS'] = int(os.getenv('SQLITE_BUSY_TIMEOUT_MS', SQLITE_BUSY_TIMEOUT_MS))
     app.config['LOG_RETENTION_DAYS'] = os.getenv('LOG_RETENTION_DAYS', LOG_RETENTION_DAYS)
-    app.config['KEA_HOOK_API_KEY'] = os.getenv('KEA_HOOK_API_KEY', KEA_HOOK_API_KEY)
-    app.config['KEA_SKIP_AUTH'] = bool(os.getenv('KEA_SKIP_AUTH', ''))
     app.config['DEFAULT_IMAGE'] = os.getenv('DEFAULT_IMAGE', DEFAULT_IMAGE)
     app.config['DEFAULT_CONFIG_FILE'] = os.getenv('DEFAULT_CONFIG_FILE', DEFAULT_CONFIG_FILE)
     app.config['DEFAULT_SCRIPT'] = os.getenv('DEFAULT_SCRIPT', DEFAULT_SCRIPT)
@@ -115,8 +105,9 @@ def create_app(config_dict: dict = {}):
 
     # Serve the built Vue SPA. Registered last, but route order doesn't
     # matter here — Werkzeug matches literal/blueprint routes like
-    # /api/lease-event ahead of this catch-all regardless of registration
-    # order. Falls back to index.html for any unrecognised path so Vue
+    # /api/provision-request ahead of this catch-all regardless of
+    # registration order. Falls back to index.html for any unrecognised
+    # path so Vue
     # Router's client-side routes resolve on a hard refresh (see
     # docs/frontend.md).
     @app.route('/', defaults={'path': ''})

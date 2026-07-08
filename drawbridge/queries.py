@@ -3,8 +3,9 @@ blueprints.
 
 These functions only stage changes (add/delete) on the Session passed in —
 they don't commit. Committing is the caller's responsibility, so a route
-that needs several of these in one transaction (e.g. /api/lease-event
-checking a device then writing a ProvisioningLog row) can do so atomically.
+that needs several of these in one transaction (e.g. /api/provision-request
+checking a device then creating a ProvisioningSession row) can do so
+atomically.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -96,9 +97,9 @@ def create_provisioning_session(
     mac: str | None = None,
     ip: str | None = None,
 ) -> ProvisioningSession:
-    """Idempotent on serial: IOS XE retries DHCP with alternating identifiers,
-    so the same device may hit /api/lease-event more than once per boot cycle.
-    Re-approving updates mac/ip rather than raising on the primary-key collision."""
+    """Idempotent on serial: a device may hit /api/provision-request more
+    than once per boot cycle. Re-approving updates mac/ip rather than
+    raising on the primary-key collision."""
     ps = session.get(ProvisioningSession, serial)
     if ps is not None:
         ps.mac = mac

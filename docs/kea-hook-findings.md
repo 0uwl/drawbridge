@@ -1,3 +1,12 @@
+**Superseded.** The DHCP-level Kea hook gate investigated here was
+abandoned in favor of a script-level gate — see
+[decisions.md](decisions.md) ("Provisioning gate moved from DHCP-level to
+script-level"). Kept for reference; the findings below (native-hook
+requirement, the `unpark()`/DROP bug, `run_script`'s async-only limitation,
+`host_cmds`+Postgres requirement) remain accurate Kea behavior. §5 (the
+SQLite multi-worker bootstrap race) is unrelated to Kea and still directly
+applies — see [database.md](database.md).
+
 # Kea Hook Implementation — Findings
 
 Notes from actually building and running the `leases4_committed` hook and a

@@ -1,10 +1,11 @@
 # Authentication
 
 Drawbridge's management UI/API (device allowlist CRUD, script management,
-user management) requires an authenticated operator session. Devices and Kea
-are unaffected — `/api/lease-event`, `/api/provision-complete`, and the
+user management) requires an authenticated operator session. Devices are
+unaffected — `/api/provision-request`, `/api/provision-complete`, and the
 device-facing `/scripts/<filename>` fetch stay unauthenticated, gated only by
-network isolation per the threat model in [architecture.md](architecture.md).
+network isolation and the serial lookup itself, per the threat model in
+[architecture.md](architecture.md).
 
 **Flask-Login** owns session/identity (`LoginManager`, `current_user`,
 `@login_required`, `UserMixin` on the `User` model — see

@@ -6,11 +6,13 @@ Alpha is "done" when:
 - The full backend (DB, auth, all API blueprints) is implemented and tested per
   [docs/testing.md](docs/testing.md), runnable via `flask run` against SQLite —
   no container required.
-- `/api/lease-event` is fully implemented and verified via direct HTTP calls
-  (pytest + curl/Postman simulating what the Kea hook would send), not against
-  a live Kea instance. The `kea/` configs and the hook callout are written as
-  code so they're ready to test against real Kea later, but a working Kea box
-  is not a gate for alpha sign-off.
+- `/api/provision-request` is fully implemented and verified via direct HTTP
+  calls (pytest + curl/Postman simulating what the ZTP script's phone-home
+  call would send), not against a live Kea instance. The `kea/` configs are
+  vanilla (no custom hook, no host reservations — see
+  [docs/decisions.md](docs/decisions.md)) and written as code so they're
+  ready to test against real Kea later, but a working Kea box is not a gate
+  for alpha sign-off.
 - A minimal Vue admin UI exists: login, device list/add/remove, provisioning
   log view. Users and settings management can be bare-bones (a working form is
   enough; polish is a follow-up).
@@ -62,10 +64,13 @@ checklist (step 7) is still in progress.
   This only ever fires on the missing-DB-file path, never on subsequent
   starts against an existing DB.
 
-### 3. Kea Control Agent client (DONE)
-- `drawbridge/kea.py`: thin client for `reservation-add`/`reservation-del`
-  against `KEA_CTRL_URL`/`KEA_SUBNET_ID`. Fail closed on unreachable/error
-  responses (raise, don't swallow) — callers decide the HTTP response.
+### 3. Kea integration (SUPERSEDED — not built)
+A Kea Control Agent client (`reservation-add`/`reservation-del`) was
+planned here, driving a DHCP-level allow/deny gate. Abandoned — see
+[docs/decisions.md](docs/decisions.md) ("Provisioning gate moved from
+DHCP-level to script-level") and [docs/kea-hook-findings.md](docs/kea-hook-findings.md).
+Kea now runs a vanilla config with no Drawbridge-facing API calls at all;
+the gate lives in `scripts/ztp-base.py`'s phone-home call instead (step 5).
 
 ### 4. API blueprints (`drawbridge/api/`)
 Build and register in this order, each with its tests immediately after
@@ -75,14 +80,13 @@ before any tests:
 1. (DONE) `auth.py` — `POST /api/auth/login`, `POST /api/auth/logout`,
    `GET /api/auth/me`.
 2. (DONE) `devices.py` — `GET/POST /api/devices`, `GET/DELETE /api/devices/<serial>`.
-   POST is idempotent on re-registering the same serial. DELETE calls
-   `reservation-del` via `drawbridge/kea.py`.
-3. (DONE) `lease.py` — `POST /api/lease-event`. The core security gate: known serial
-   → 200 + `reservation-add` confirmation; unknown → 403; Kea Control Agent
-   unreachable on approval path → fail closed (non-200). Must stay inside the
-   2s `LEASE_EVENT_TIMEOUT` budget — keep the transaction short.
-   `POST /api/provision-complete` (device reports outcome; deletes the
-   `devices` row, writes `ProvisioningLog`).
+   POST is idempotent on re-registering the same serial.
+3. (DONE) `leases.py` — `GET /api/provision-request`. The core security gate,
+   called by the ZTP script's phone-home step, not Kea: known serial → 200
+   + `ProvisioningSession` created; unknown → 404; missing serial → 422.
+   `PUT/POST /api/provision-complete` (device reports outcome; deletes the
+   `ProvisioningSession` row — the `devices` allowlist row is untouched —
+   writes `ProvisioningLog`).
 4. (DONE) `files.py` — `GET /scripts/<filename>`, `GET /images/<filename>`, `GET /configs/<filename>` (unauthenticated device-facing
    fetch), the authenticated management variant for file upload/listing.
 5. (DONE) `settings.py` — merges what would have been a separate `users.py`:
@@ -90,7 +94,7 @@ before any tests:
    `PUT/DELETE /api/users/<id>`) alongside `GET/PUT
    /api/settings/log-retention` (admin-only on PUT). Wire the
    lazy-purge-on-insert logic here and into the `ProvisioningLog` insert path
-   used by `lease.py`/`files.py`. Last-remaining-admin deletes/demotions are
+   used by `leases.py`/`files.py`. Last-remaining-admin deletes/demotions are
    rejected. See [docs/authentication.md](docs/authentication.md) for the
    account lifecycle (admin creates username+role only, passwordless until
    the user claims it via `/api/auth/claim`). The password-claim and
@@ -100,35 +104,40 @@ before any tests:
 
 Register all blueprints in `create_app()` (the TODO already marks where) and
 apply `@login_required` per the matrix in [docs/api.md](docs/api.md) — only
-`/api/lease-event`, `/api/provision-complete`, and the device-facing
+`/api/provision-request`, `/api/provision-complete`, and the device-facing
 `/scripts/<filename>` stay open.
 
 ### 5. Base ZTP script (DONE)
 - `scripts/ztp-base.py`: a stub for alpha, not a real provisioning script.
-  Purpose is to exercise the serve/fetch/callback contract end-to-end for
-  testing — it emulates what a device would request and POST back, nothing
-  more. Real Day-0 IOS XE provisioning logic (cert validation, hash
-  verification, actual config push) is deliberately deferred to a later
-  phase once this is tested against real hardware.
+  Its first action is the phone-home gate: `GET /api/provision-request` with
+  its own serial (read via `show version`), exiting cleanly without
+  reporting anything further if denied or unreachable. Beyond that it
+  exercises the serve/fetch/callback contract end-to-end for testing — it
+  emulates what a device would request and PUT back, nothing more. Real
+  Day-0 IOS XE provisioning logic (cert validation, hash verification,
+  actual config push) is deliberately deferred to a later phase once this
+  is tested against real hardware.
 - Keep it to stdlib only (`urllib`/`http.client`/`ssl`, no `requests` or
   other third-party imports, no f-strings or other syntax assumptions) —
   IOS XE's onboard Python environment (Guestshell) is restrictive, and
   whatever gets written now should not need a rewrite later just to run
   there. Procedural, not class-based.
 
-### 6. Kea-side artifacts (code, not validated live this phase)
+### 6. Kea-side artifacts (DONE — vanilla config, no hook)
 - `kea/kea-dhcp4.conf`, `kea/kea-ctrl-agent.conf` per
-  [docs/kea.md](docs/kea.md).
-- `kea/hook/` — the `leases4_committed` callout: POST to
-  `/api/lease-event`, CONTINUE on 200 / DROP otherwise, 2s timeout.
+  [docs/kea.md](docs/kea.md) — dynamic pool, Option 67 unconditional for
+  every client, no `hooks-libraries`, no `host_cmds`, no `hosts-database`.
+- No native hook/callout — see [docs/decisions.md](docs/decisions.md) for
+  why that approach was abandoned. The gate is entirely in
+  `scripts/ztp-base.py` (step 5) and `/api/provision-request` (step 4).
 - Not gated by a live Kea instance for alpha sign-off, but should be
-  internally consistent with the now-implemented `/api/lease-event` contract.
+  internally consistent with the `/api/provision-request` contract.
 
 ### 7. Test suite
 Fill out `tests/` per [docs/testing.md](docs/testing.md)'s checklist:
-`test_lease_api.py`, `test_devices_api.py`, `test_auth_api.py`,
-`test_kea_client.py`, plus users/settings/provisioning-log coverage. Mock
-`drawbridge/kea.py` calls — no live Kea dependency. Include the
+`test_lease_api.py`, `test_ztp_base.py`, `test_devices_api.py`,
+`test_auth_api.py`, plus users/settings/provisioning-log coverage. No Kea
+mocking needed — nothing in the request path calls Kea. Include the
 multi-worker-style concurrent-write test.
 
 ### 8. Minimal frontend
@@ -159,15 +168,16 @@ of where in the tree a component sits.
   when `auth.currentUser` is unset.
 - Manual pass through `dev.sh` (Flask + Vite dev server) to confirm
   the golden path: log in as the bootstrapped admin, register a device,
-  simulate a lease-event via curl, confirm it shows in the log, remove the
-  device.
+  simulate a provision-request via curl, confirm it shows in the log, remove
+  the device.
 
 ### 9. End-to-end manual verification (no live Kea)
 - `pytest` green.
-- `flask run` + curl sequence simulating the full DHCP flow against
-  `/api/lease-event` and `/api/provision-complete` by hand, confirming DB
-  state transitions (`devices` row created → deleted, `ProvisioningLog` rows
-  appended) match [docs/architecture.md](docs/architecture.md)'s DHCP Flow.
+- `flask run` + curl sequence simulating the full flow against
+  `/api/provision-request` and `/api/provision-complete` by hand, confirming
+  DB state transitions (`ProvisioningSession` created → deleted,
+  `ProvisioningLog` rows appended, `devices` row untouched) match
+  [docs/architecture.md](docs/architecture.md)'s DHCP Flow.
 - UI smoke test per step 8.
 
 ## Resolved decisions

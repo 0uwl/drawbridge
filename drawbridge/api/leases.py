@@ -1,27 +1,25 @@
-from flask import Blueprint, request, current_app
+from flask import Blueprint, request
 
-from drawbridge.auth import kea_endpoint
 from drawbridge.db import get_session
-from drawbridge.kea import reservation_add, reservation_del, KeaError
 from drawbridge.queries import get_device, get_provisioning_session, create_provisioning_session, delete_provisioning_session, add_log_entry
 from drawbridge.utils import error_response, success_response
 
 def create_blueprint():
     bp = Blueprint('leases', __name__)
 
-    @bp.post('/lease-event')
-    @kea_endpoint
-    def lease_event():
-        data = request.get_json()
-        if data is None:
-            return error_response('Empty request body', 'empty_request_body', code=422)
+    @bp.get('/provision-request')
+    def provision_request():
+        """Called by the ZTP script's phone-home step on boot (see
+        scripts/ztp-base.py) — a plain GET with query-string params, since
+        IOS XE's `copy` primitive (the only network I/O available from
+        Guestshell, see docs/decisions.md) can't attach a request body.
+        Open route, no auth decorator — same posture as /provision-complete
+        below: gated by the serial lookup itself, not by caller identity."""
+        serial = request.args.get('serial')
+        if not serial:
+            return error_response('Request is missing required parameter serial', 'missing_parameter', code=422)
 
-        serial = data.get('serial')
-        if serial is None:
-            return error_response('Request body is missing required parameter serial', 'missing_parameter', code=422)
-
-        mac = data.get('mac')
-        ip = data.get('ip')
+        mac = request.args.get('mac')  # optional, audit/logging only — not used for lookup
 
         session = get_session()
         device = get_device(session, serial)
@@ -29,18 +27,7 @@ def create_blueprint():
         if device is None:
             return error_response(f'{serial} not found', 'device_not_found', code=404)
 
-        try:
-            reservation_add(
-                ctrl_url=current_app.config['KEA_CTRL_URL'],
-                subnet_id=current_app.config['KEA_SUBNET_ID'],
-                mac=mac,
-                ip=ip,
-            )
-        except KeaError as e:
-            current_app.logger.error(f'Kea Control Agent error on reservation-add for {serial}: {e}')
-            return error_response('Kea Control Agent unreachable', 'kea_error', code=502)
-
-        create_provisioning_session(session, serial=serial, mac=mac, ip=ip)
+        create_provisioning_session(session, serial=serial, mac=mac)
         session.commit()
 
         return success_response(f'{serial} approved', payload=device.as_dict())
@@ -66,19 +53,6 @@ def create_blueprint():
 
         if active is None:
             return error_response(f'{serial} is not in active provisioning', 'device_not_active', code=404)
-
-        if active.mac is not None:
-            try:
-                reservation_del(
-                    ctrl_url=current_app.config['KEA_CTRL_URL'],
-                    subnet_id=current_app.config['KEA_SUBNET_ID'],
-                    mac=active.mac,
-                )
-            except KeaError as e:
-                current_app.logger.error(f'Kea Control Agent error on reservation-del for {serial}: {e}')
-                return error_response('Kea Control Agent unreachable', 'kea_error', code=502)
-        else:
-            current_app.logger.warning(f'No MAC on record for {serial}, skipping reservation-del')
 
         add_log_entry(
             session,

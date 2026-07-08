@@ -3,7 +3,7 @@ from flask_login import login_required
 from werkzeug.security import generate_password_hash
 
 from drawbridge import create_app
-from drawbridge.auth import admin_required, kea_endpoint, load_user
+from drawbridge.auth import admin_required, load_user
 from drawbridge.db import get_session
 from drawbridge.models import User
 from drawbridge import queries
@@ -87,80 +87,3 @@ def test_admin_required_allows_admin(app):
     _create_and_login(app, client, role='admin')
     response = client.get('/_test/admin')
     assert response.status_code == 200
-
-
-# kea_endpoint decorator — tests use a minimal /_test/kea route registered
-# on the per-test app fixture so there are no cross-test route conflicts.
-
-def _register_kea_test_route(app):
-    @app.route('/_test/kea', methods=['POST'])
-    @kea_endpoint
-    def _kea():
-        return 'ok'
-    return app.test_client()
-
-
-def test_kea_endpoint_allows_localhost_without_api_key(app):
-    client = _register_kea_test_route(app)
-    response = client.post('/_test/kea')  # test client defaults to 127.0.0.1
-    assert response.status_code == 200
-
-
-def test_kea_endpoint_allows_ipv6_loopback_without_api_key(app):
-    client = _register_kea_test_route(app)
-    response = client.post('/_test/kea', environ_overrides={'REMOTE_ADDR': '::1'})
-    assert response.status_code == 200
-
-
-def test_kea_endpoint_blocks_non_local_when_no_api_key_configured(app):
-    client = _register_kea_test_route(app)
-    response = client.post('/_test/kea', environ_overrides={'REMOTE_ADDR': '10.0.0.5'})
-    assert response.status_code == 403
-    assert response.get_json()['success'] is False
-
-
-def test_kea_endpoint_allows_non_local_with_correct_bearer_token(app):
-    app.config['KEA_HOOK_API_KEY'] = 'correct-key'
-    client = _register_kea_test_route(app)
-    response = client.post(
-        '/_test/kea',
-        environ_overrides={'REMOTE_ADDR': '10.0.0.5'},
-        headers={'Authorization': 'Bearer correct-key'},
-    )
-    assert response.status_code == 200
-
-
-def test_kea_endpoint_blocks_non_local_with_wrong_bearer_token(app):
-    app.config['KEA_HOOK_API_KEY'] = 'correct-key'
-    client = _register_kea_test_route(app)
-    response = client.post(
-        '/_test/kea',
-        environ_overrides={'REMOTE_ADDR': '10.0.0.5'},
-        headers={'Authorization': 'Bearer wrong-key'},
-    )
-    assert response.status_code == 403
-
-
-def test_kea_endpoint_blocks_non_local_with_missing_authorization_header(app):
-    app.config['KEA_HOOK_API_KEY'] = 'correct-key'
-    client = _register_kea_test_route(app)
-    response = client.post('/_test/kea', environ_overrides={'REMOTE_ADDR': '10.0.0.5'})
-    assert response.status_code == 403
-
-
-def test_kea_endpoint_allows_non_local_when_skip_auth_is_set(app):
-    app.config['KEA_SKIP_AUTH'] = True
-    client = _register_kea_test_route(app)
-    response = client.post('/_test/kea', environ_overrides={'REMOTE_ADDR': '10.0.0.5'})
-    assert response.status_code == 200
-
-
-def test_kea_endpoint_blocks_non_local_with_malformed_authorization_header(app):
-    app.config['KEA_HOOK_API_KEY'] = 'correct-key'
-    client = _register_kea_test_route(app)
-    response = client.post(
-        '/_test/kea',
-        environ_overrides={'REMOTE_ADDR': '10.0.0.5'},
-        headers={'Authorization': 'correct-key'},  # missing "Bearer " prefix
-    )
-    assert response.status_code == 403

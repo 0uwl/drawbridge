@@ -11,6 +11,9 @@ docs/decisions.md and alpha.md step 5.
 import json
 import os
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 
 # Must match the host/port devices reach Drawbridge on (see Option 67 in
 # kea/kea-dhcp4.conf and the Drawbridge deployment config).
@@ -22,6 +25,10 @@ STATUS_FLASH_PATH = 'flash:' + STATUS_FILENAME
 # Guestshell's bind-mounted view of flash: — see docs/decisions.md
 # "C9200CX network stack isolation".
 STATUS_LOCAL_PATH = '/bootflash/' + STATUS_FILENAME
+
+PROVISION_REQUEST_FILENAME = 'provision-request.json'
+PROVISION_REQUEST_FLASH_PATH = 'flash:' + PROVISION_REQUEST_FILENAME
+PROVISION_REQUEST_LOCAL_PATH = '/bootflash/' + PROVISION_REQUEST_FILENAME
 
 
 def get_serial():
@@ -38,6 +45,43 @@ def get_serial():
     if match:
         return match.group(1)
     return None
+
+
+def request_provisioning(serial):
+    """Phones home to Drawbridge before doing anything else. Any device on
+    the provisioning VLAN can reach this — the allowlist check on the
+    server side is the actual gate, not the caller's identity (see
+    docs/decisions.md). GET with query-string params, not POST with a JSON
+    body: IOS XE's 'copy' primitive (the only network I/O available in
+    Guestshell, per the C9200CX isolation note above) can't attach a
+    request body, only a URL and a destination file. Returns the parsed
+    decision dict, or None if denied/unreachable.
+    """
+    url = 'http://{0}:{1}/api/provision-request?serial={2}'.format(
+        DRAWBRIDGE_HOST, DRAWBRIDGE_PORT, urllib.parse.quote(serial))
+
+    try:
+        import cli
+    except ImportError:
+        cli = None
+
+    if cli is not None:
+        cli.execute('copy {0} {1}'.format(url, PROVISION_REQUEST_FLASH_PATH))
+        # ponytail: copy's behavior on a non-2xx response (e.g. a 404 denial)
+        # is unverified without real hardware — treat a missing/unreadable
+        # local file the same as a denial (fail closed either way). Revisit
+        # once tested against a real C9200CX.
+        try:
+            with open(PROVISION_REQUEST_LOCAL_PATH) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            return json.load(response)
+    except urllib.error.HTTPError:
+        return None  # e.g. 404 device_not_found — denied, fail closed
 
 
 def build_status_payload(serial):
@@ -71,7 +115,6 @@ def report_status(payload):
         cli.execute('copy {0} {1}'.format(STATUS_FLASH_PATH, url))
         return
 
-    import urllib.request
     body = json.dumps(payload).encode('utf-8')
     request = urllib.request.Request(url, data=body, method='PUT', headers={'Content-Type': 'application/json'})
     urllib.request.urlopen(request, timeout=10)
@@ -79,6 +122,13 @@ def report_status(payload):
 
 def main():
     serial = get_serial()
+    if serial is None:
+        return
+
+    decision = request_provisioning(serial)
+    if decision is None or not decision.get('success'):
+        return  # denied or unreachable — exit cleanly, no completion callback
+
     payload = build_status_payload(serial)
     report_status(payload)
 
