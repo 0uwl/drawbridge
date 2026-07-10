@@ -64,18 +64,27 @@ Provisioning VLAN
 
 ## DHCP Flow
 
-Kea runs a vanilla DHCPv4 config — no custom hooks, no client
-classification, no host reservations. The allow/deny gate lives in the ZTP
-script itself, not at the DHCP layer (see [decisions.md](decisions.md) for
-why: a native Kea hook was built and found broken in a security-relevant
-way, and for this threat model — a physically isolated provisioning VLAN,
-not internet-facing — withholding the DHCP lease itself buys little real
-protection against a capable attacker anyway).
+Kea runs no custom hooks and no host reservations. The allow/deny gate
+lives in the ZTP script itself, not at the DHCP layer (see
+[decisions.md](decisions.md) for why: a native Kea hook was built and
+found broken in a security-relevant way, and for this threat model — a
+physically isolated provisioning VLAN, not internet-facing — withholding
+the DHCP lease itself buys little real protection against a capable
+attacker anyway). Kea does use native client classification on Option 60
+(vendor-class-identifier) to admit only Cisco/Juniper-looking clients to
+the pool and hand each vendor its own DHCP options (see
+[kea.md](kea.md)) — Cisco and Juniper ZTP boot differently and need
+different options, which is what this is actually for, not access control.
+Only the Cisco path has real options configured for alpha; Juniper is
+admitted to the pool already but has no ZTP support built yet. Option 60
+is client-supplied and trivially spoofable regardless, so this is never a
+substitute for the script-level gate below.
 
 1. IOS XE device boots with no startup config, sends DHCPDISCOVER
-2. Kea leases an address from the dynamic pool to any client and returns
-   Option 67 pointing at the generic ZTP script — every device gets this,
-   registered or not
+2. Kea leases an address from the dynamic pool to any client matching the
+   vendor-class filter and, for Cisco, returns Option 67 pointing at the
+   generic ZTP script — every matching Cisco device gets this, registered
+   or not
 3. Device fetches the ZTP script over HTTPS, verifies server cert and payload hash
 4. Script's first action: reads its own serial via `show version`, calls
    `GET /api/provision-request?serial=...`

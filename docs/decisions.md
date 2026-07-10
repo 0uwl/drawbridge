@@ -15,6 +15,19 @@
   version`) is the canonical allowlist identifier. MAC is logged for audit
   but not used for lookup.
 
+- **DHCP client classification by vendor (Option 60) is for per-vendor
+  options, not access control.** Cisco IOS-XE and Juniper Junos ZTP boot
+  differently — different DHCP options pointing at different boot
+  mechanisms — so `kea/kea-dhcp4.conf` uses Kea's native client
+  classification to give each vendor its own `option-data` rather than one
+  global block that can't serve both. Only `cisco-devices` has real options
+  for alpha (`scripts/ztp-base.py`); `juniper-devices` is admitted to the
+  pool already so Junos ZTP support is additive later, but isn't built —
+  out of scope for alpha. This is unrelated to the actual security gate
+  (the script's phone-home call): Option 60 is client-supplied and
+  trivially spoofable, so pool admission by vendor class is a DHCP-options
+  routing decision, not an allowlist. See [kea.md](kea.md).
+
 - **SQLAlchemy ORM.** `Device`, `ProvisioningLog`, `Setting`, and `User` are
   SQLAlchemy models (`drawbridge/models.py`) rather than plain SQL. Sessions
   are request-scoped and short-lived — opened on first use within a request

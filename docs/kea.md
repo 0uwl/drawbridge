@@ -5,20 +5,35 @@ you have an Ubuntu Server with Kea installed locally. This repository
 includes example configurations for the DHCP server so that you can get the
 Drawbridge service up and running as quickly as possible.
 
-Kea's config here is intentionally vanilla — no custom hooks, no client
-classification, no host reservations. Every device gets a normal lease and
-the same Option 67 pointer at the ZTP script; the allow/deny decision
-happens in the script itself, which phones home to Drawbridge with its own
-serial before doing anything real. See [decisions.md](decisions.md) for why
-(a native Kea hook was built and found broken — see
-[kea-hook-findings.md](kea-hook-findings.md) — and dragged in a hard
-PostgreSQL requirement for Kea's own hosts-database that this design avoids
-entirely).
+Kea's config here has no custom hooks, no host reservations, and no
+Drawbridge-facing API calls — the actual allow/deny decision happens in the
+ZTP script, which phones home to Drawbridge with its own serial before
+doing anything real. See [decisions.md](decisions.md) for why a DHCP-level
+gate isn't used for that decision (a native Kea hook was built and found
+broken — see [kea-hook-findings.md](kea-hook-findings.md) — and dragged in
+a hard PostgreSQL requirement for Kea's own hosts-database that this design
+avoids entirely).
 
 **DHCPv4** (`kea/kea-dhcp4.conf`):
 - Provisioning subnet: `192.168.100.0/24`, pool `192.168.100.10–200`
-- Option 67 (`boot-file-name`) set unconditionally to
-  `http://<host-ip>:8080/scripts/ztp-base.py` for every client
+- **Per-vendor client classification** (native Kea client classification,
+  no hooks-libraries needed): client classes `cisco-devices` and
+  `juniper-devices` match Option 60 (vendor-class-identifier) prefixes, and
+  the pool admits only clients in one of those classes (via a combined
+  `known-network-vendor` class). The real reason for this, ahead of any
+  security framing, is that **Cisco IOS-XE and Juniper Junos ZTP boot
+  differently** — they need different DHCP options pointing at different
+  boot mechanisms, so a single global `option-data` block can't serve both.
+  Kea's per-class `option-data` is the mechanism: `cisco-devices` carries
+  Option 67 (`boot-file-name`) pointing at `scripts/ztp-base.py`;
+  `juniper-devices` has no `option-data` yet — Junos ZTP support is future
+  work, explicitly out of scope for alpha — but is already admitted to the
+  pool so adding it later is additive (one `option-data` block on that
+  class), not a subnet/pool change.
+- Pool admission by vendor class is **not** the security gate — Option 60
+  is client-supplied and trivially spoofable. The actual allow/deny
+  decision is the script-level phone-home call described above; vendor
+  classification only decides which DHCP options a device receives.
 - No `hooks-libraries`, no `host_cmds`, no `hosts-database` — Kea never
   talks to Drawbridge or vice versa
 
