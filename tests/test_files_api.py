@@ -200,6 +200,20 @@ def test_serve_returns_404_for_missing_file(client, route, filename):
     assert response.get_json()['error'] == 'file_not_found'
 
 
+@pytest.mark.parametrize('route', ['images', 'configs', 'scripts'])
+@pytest.mark.parametrize('escaped_path', [
+    '../../main.py',
+    '..%2f..%2fmain.py',
+    '%2e%2e%2f%2e%2e%2fmain.py',
+])
+def test_serve_rejects_path_traversal_attempts(client, route, escaped_path):
+    """The <string:filename> route converter excludes '/', so an escaping
+    segment never reaches send_from_directory or the DB lookup — this locks
+    that behavior in rather than changing it."""
+    response = client.get(f'{BASE}/{route}/{escaped_path}')
+    assert response.status_code == 404
+
+
 # --- DELETE /files/<type>/<filename> ---
 
 @pytest.mark.parametrize('route,filename', [

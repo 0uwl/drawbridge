@@ -1,5 +1,8 @@
+import multiprocessing
+
 import pytest
 
+from drawbridge import create_app
 from drawbridge.db import get_session
 from drawbridge.models import Device, ProvisioningSession
 
@@ -90,3 +93,57 @@ def test_provision_complete_missing_serial_returns_422(client):
 
     assert response.status_code == 422
     assert response.get_json()['error'] == 'missing_parameter'
+
+
+# Steady-state concurrency
+
+def _provision_request_worker(database_path, files_path, serial, barrier, result_queue):
+    """multiprocessing.Process target — module-level so it's usable
+    regardless of start method. Simulates multiple devices phoning home at
+    once (the normal-operation case), as opposed to
+    test_db.py's one-time bootstrap race.
+    """
+    # create_app() first, then barrier — the write itself must be
+    # synchronized, not process startup, or jitter spreads the requests out
+    # enough that they never actually contend for the same DB file.
+    app = create_app({'TESTING': True, 'DATABASE_PATH': database_path, 'FILES_PATH': files_path})
+    client = app.test_client()
+    barrier.wait()
+    response = client.get(f'{BASE}/provision-request', query_string={'serial': serial})
+    result_queue.put((serial, response.status_code))
+
+
+def test_concurrent_provision_requests_from_different_devices_all_succeed(tmp_path):
+    database_path = str(tmp_path / 'drawbridge.db')
+    files_path = str(tmp_path / 'files')
+    serials = [f'FJC2517X0{i:02d}' for i in range(4)]
+
+    app = create_app({'TESTING': True, 'DATABASE_PATH': database_path, 'FILES_PATH': files_path})
+    with app.app_context():
+        session = get_session()
+        for serial in serials:
+            session.add(Device(serial=serial, mac=f'aa:bb:cc:dd:ee:{serial[-2:]}', added_by='operator'))
+        session.commit()
+
+    barrier = multiprocessing.Barrier(len(serials))
+    result_queue = multiprocessing.Queue()
+    processes = [
+        multiprocessing.Process(
+            target=_provision_request_worker,
+            args=(database_path, files_path, serial, barrier, result_queue),
+        )
+        for serial in serials
+    ]
+    for p in processes:
+        p.start()
+    for p in processes:
+        p.join(timeout=30)
+
+    assert all(p.exitcode == 0 for p in processes)
+    assert result_queue.qsize() == len(serials)
+    assert all(status == 200 for _, status in (result_queue.get() for _ in serials))
+
+    with app.app_context():
+        session = get_session()
+        for serial in serials:
+            assert session.get(ProvisioningSession, serial) is not None

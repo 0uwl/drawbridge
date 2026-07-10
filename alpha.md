@@ -133,7 +133,7 @@ apply `@login_required` per the matrix in [docs/api.md](docs/api.md) — only
 - Not gated by a live Kea instance for alpha sign-off, but should be
   internally consistent with the `/api/provision-request` contract.
 
-### 7. Test suite
+### 7. Test suite (DONE)
 Fill out `tests/` per [docs/testing.md](docs/testing.md)'s checklist:
 `test_lease_api.py`, `test_ztp_base.py`, `test_devices_api.py`,
 `test_auth_api.py`, plus users/settings/provisioning-log coverage. No Kea

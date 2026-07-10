@@ -24,11 +24,23 @@ Key test cases to cover:
 - `POST /api/users` as a non-admin operator → 403
 - Concurrent writes from multiple sessions (simulating multiple workers) don't raise unhandled `database is locked` errors
 
-**Coverage note:** `drawbridge/db.py`'s PostgreSQL bootstrap-lock path
-(`_postgres_lock`) is structurally identical to the tested SQLite path
-(`_sqlite_lock`) but isn't itself exercised by the suite — no live Postgres
-server is available in CI. This is an accepted alpha-scope gap, not
-silently ignored.
+`drawbridge/db.py`'s PostgreSQL bootstrap-lock path (`_postgres_lock`) has
+its own tier at `tests/postgres-integration/` — a plain `pytest` run
+starts a throwaway Postgres container automatically (via a session-scoped
+fixture in that directory's `conftest.py`) and tears it down after, so no
+manual setup is needed. It skips cleanly if `podman` isn't installed,
+rather than failing the run — see that directory's README.
+
+**Coverage note:** the `GET /api/log` item above has no route implementing
+it anywhere in `drawbridge/api/*.py` — `ProvisioningLog` rows are written
+(and purge-tested, see `tests/test_queries.py`) but never exposed over
+HTTP. Flagged as a follow-up for whoever builds the step-8 frontend's Log
+view, not silently dropped from the checklist.
+
+`kea/*.conf` has static contract tests (`tests/test_kea_config.py`) that
+run in the default suite — see `tests/kea-integration/README.md` for the
+separate, opt-in, container-based tiers that require a real Kea process
+and are not part of `pytest`.
 
 Run with:
 ```bash
