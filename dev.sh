@@ -17,7 +17,7 @@ export FLASK_APP=drawbridge/main.py
 export FLASK_DEBUG=1
 export DRAWBRIDGE_PORT="${DRAWBRIDGE_PORT:-8080}"
 export DATABASE_PATH="${DATABASE_PATH:-./tests/dev-data/drawbridge.db}"
-export FILES_PATH="${FILES_PATH:-./files}"
+export FILES_PATH="${FILES_PATH:-./tests/dev-data/files}"
 export KEA_CTRL_URL="${KEA_CTRL_URL:-http://localhost:8081}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-dev}"
 export SECRET_KEY="${SECRET_KEY:-dev-only-insecure-secret-key}"
@@ -40,6 +40,7 @@ cleanup() {
     done
     wait 2>/dev/null || true
     reset_dev_database
+    clear_uploaded_files
 }
 
 reset_dev_database() {
@@ -52,6 +53,14 @@ reset_dev_database() {
     if [[ "$DATABASE_PATH" != *"://"* ]]; then
         echo "==> Resetting dev database ($DATABASE_PATH)"
         rm -f "$DATABASE_PATH" "$DATABASE_PATH.bootstrap-lock" "$DATABASE_PATH-wal" "$DATABASE_PATH-shm"
+    fi
+}
+
+clear_uploaded_files() {
+    read -rp "Delete uploaded files from $FILES_PATH? [y/N] " delete
+    if [[ "$delete" =~ ^[Yy]$ ]]; then
+        echo "==> Clearing directory $FILES_PATH"
+        rm -f "$FILES_PATH/*"
     fi
 }
 

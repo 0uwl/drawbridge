@@ -1,16 +1,23 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useDevicesStore } from '../stores/devices'
 import { useLogStore } from '../stores/log'
+import { useFilesStore } from '../stores/files'
 import DeviceTabs from '../components/DeviceTabs.vue'
 import { formatTimestamp } from '../utils/format'
 
 const devices = useDevicesStore()
 const log = useLogStore()
+const files = useFilesStore()
 onMounted(() => {
   devices.list()
   log.fetchLog()
+  files.list()
 })
+
+const images = computed(() => files.items.filter((f) => f.file_type === 'image'))
+const configs = computed(() => files.items.filter((f) => f.file_type === 'config'))
+const scripts = computed(() => files.items.filter((f) => f.file_type === 'script'))
 
 const showAddModal = ref(false)
 const pendingRemove = ref(null)
@@ -107,33 +114,47 @@ async function confirmRemove() {
 
     <!-- Add device modal -->
     <dialog class="modal" :open="showAddModal">
-      <div class="modal-box">
+      <div class="modal-box max-w-3xl">
         <h3 class="font-bold text-lg mb-4">Add device</h3>
-        <form @submit.prevent="submitAdd" class="flex flex-col gap-3">
-          <label class="form-control">
-            <span class="label-text">Serial *</span>
-            <input v-model="form.serial" type="text" class="input input-bordered" required />
-          </label>
-          <label class="form-control">
-            <span class="label-text">MAC</span>
-            <input v-model="form.mac" type="text" class="input input-bordered" />
-          </label>
-          <label class="form-control">
-            <span class="label-text">Description</span>
-            <input v-model="form.description" type="text" class="input input-bordered" />
-          </label>
-          <label class="form-control">
-            <span class="label-text">Image</span>
-            <input v-model="form.image" type="text" class="input input-bordered" />
-          </label>
-          <label class="form-control">
-            <span class="label-text">Config file</span>
-            <input v-model="form.config_file" type="text" class="input input-bordered" />
-          </label>
-          <label class="form-control">
-            <span class="label-text">Script</span>
-            <input v-model="form.script" type="text" class="input input-bordered" />
-          </label>
+        <form @submit.prevent="submitAdd">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
+            <label class="form-control">
+              <span class="label-text">Serial *</span>
+              <input v-model="form.serial" type="text" class="input input-bordered w-full" required />
+            </label>
+            <label class="form-control">
+              <span class="label-text">MAC</span>
+              <input v-model="form.mac" type="text" class="input input-bordered w-full" />
+            </label>
+            <label class="form-control sm:col-span-2">
+              <span class="label-text">Description</span>
+              <input v-model="form.description" type="text" class="input input-bordered w-full" />
+            </label>
+          </div>
+
+          <div class="flex flex-wrap gap-4 mt-4">
+            <label class="form-control">
+              <span class="label-text">Image</span>
+              <select v-model="form.image" class="select select-bordered max-w-64 truncate">
+                <option value="">— none —</option>
+                <option v-for="f in images" :key="f.filename" :value="f.filename">{{ f.filename }}</option>
+              </select>
+            </label>
+            <label class="form-control">
+              <span class="label-text">Config file</span>
+              <select v-model="form.config_file" class="select select-bordered max-w-64 truncate">
+                <option value="">— none —</option>
+                <option v-for="f in configs" :key="f.filename" :value="f.filename">{{ f.filename }}</option>
+              </select>
+            </label>
+            <label class="form-control">
+              <span class="label-text">Script</span>
+              <select v-model="form.script" class="select select-bordered max-w-64 truncate">
+                <option value="">— none —</option>
+                <option v-for="f in scripts" :key="f.filename" :value="f.filename">{{ f.filename }}</option>
+              </select>
+            </label>
+          </div>
 
           <div class="modal-action">
             <button type="button" class="btn" @click="showAddModal = false">Cancel</button>
