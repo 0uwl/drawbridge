@@ -17,14 +17,41 @@ frontend/
 ├── public/
 │   └── favicon.svg
 └── src/
-    ├── main.js
-    ├── App.vue          ← placeholder root component; real admin views
-    │                       (devices, users, log, settings) are a follow-up
-    └── style.css
+    ├── main.js          ← mounts App, installs Pinia + Vue Router
+    ├── App.vue          ← navbar shell + <router-view/>
+    ├── style.css        ← Tailwind/DaisyUI entry point (see Styling below)
+    ├── api/
+    │   └── client.js    ← single configured axios instance
+    ├── stores/          ← one Pinia store per domain (auth, devices, sessions, log, users, settings)
+    ├── components/
+    │   └── DeviceTabs.vue ← shared tab bar (Active Sessions / Allowlist) used by both device views
+    ├── utils/
+    │   └── format.js    ← formatTimestamp() — abbreviates ISO timestamps to the browser's local date/time-to-minute
+    ├── router/
+    │   └── index.js     ← routes + the auth navigation guard
+    └── views/           ← Login, Sessions, Devices, Log, Settings
 ```
 
 `frontend/node_modules/` and `frontend/dist/` are gitignored and
 dockerignored — never commit installed packages or build output.
+
+## Styling
+
+The UI is styled with **Tailwind CSS v4** and **DaisyUI v5** components
+(`table`, `btn`, `modal`, `navbar`, `alert`, `badge`, `form-control`, etc.).
+Setup uses Tailwind v4's CSS-first configuration — no `tailwind.config.js`
+or `postcss.config.js`:
+
+- `vite.config.js` adds the `@tailwindcss/vite` plugin alongside `vue()`.
+- `src/style.css` is just:
+  ```css
+  @import "tailwindcss";
+  @plugin "daisyui";
+  ```
+
+API access stays centralized in the Pinia stores under `stores/` —
+components call store actions and read store state, never import `axios`
+directly. See `alpha.md` step 8 for the store/view breakdown.
 
 ## Why one container, no separate frontend server
 
@@ -86,7 +113,7 @@ def serve_frontend(path):
   still works once client-side routing is added.
 - This route is registered last in `create_app()`, but registration order
   doesn't actually matter: Werkzeug sorts routes by specificity, so a
-  literal/blueprint route like `/api/lease-event` always matches ahead of
+  literal/blueprint route like `/api/provision-request` always matches ahead of
   the `/<path:path>` catch-all regardless of where each is added.
 - If `drawbridge/static/` doesn't exist (frontend never built — the normal
   state during backend-only local dev, see below), requests here 404. That's
@@ -101,7 +128,7 @@ Two distinct workflows, depending on what you're changing:
 
 ```bash
 # terminal 1: the real backend
-flask run --port 8080
+flask run --port ${DRAWBRIDGE_PORT:-8080}
 
 # terminal 2: the frontend, with hot module reload
 cd frontend
@@ -109,11 +136,14 @@ npm install   # first time only
 npm run dev
 ```
 
-Browse `http://localhost:5173` (Vite's dev server), not port 8080. Vite's
-`server.proxy` config forwards `/api`, `/scripts`, and `/health` requests to
-`http://127.0.0.1:8080`, so the SPA calls the real Flask backend while you
-get instant HMR for `.vue` component changes. Update the proxy targets in
-`vite.config.js` if you run Flask on a different port.
+Browse `http://localhost:5173` (Vite's dev server), not the backend port.
+Vite's `server.proxy` config forwards `/api`, `/files`, and `/health`
+requests to `http://127.0.0.1:$DRAWBRIDGE_PORT` (default `8080` if unset —
+see [deployment.md](deployment.md)), so the SPA calls the real Flask
+backend while you get instant HMR for `.vue` component changes. `dev.sh`
+exports `DRAWBRIDGE_PORT` before starting both processes, so this matches
+automatically when both are started that way; set it by hand in each
+terminal above if running them separately on a non-default port.
 
 **Checking the fully-baked integration — build once, serve through Flask:**
 
@@ -121,10 +151,10 @@ get instant HMR for `.vue` component changes. Update the proxy targets in
 cd frontend
 npm run build      # writes straight into ../drawbridge/static
 cd ..
-flask run --port 8080
+flask run --port ${DRAWBRIDGE_PORT:-8080}
 ```
 
-Browse `http://localhost:8080` directly. This is the same code path
+Browse `http://localhost:$DRAWBRIDGE_PORT` directly. This is the same code path
 production uses (`serve_frontend` above), just without the container —
 useful for confirming the catch-all route and built asset paths behave
 before doing a full container build.

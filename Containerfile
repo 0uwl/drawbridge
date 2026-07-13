@@ -27,6 +27,9 @@ USER drawbridge
 
 ENV FLASK_ENV=production
 
+# Informational only — doesn't bind anything itself. Gunicorn's actual bind
+# port follows DRAWBRIDGE_PORT (drawbridge/gunicorn.conf.py, default 8080 to
+# match here); update the port mapping at run time if that's overridden.
 EXPOSE 8080
 
 # /app/data and /app/scripts are mount points (see docs/deployment.md) — do

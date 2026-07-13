@@ -5,27 +5,71 @@
   VLAN. The threat model here (physically isolated VLAN, internal deployment)
   does not justify it.
 
-- **Fail closed everywhere.** If Drawbridge is unreachable, Kea drops the
-  lease. If Kea's Control Agent is unreachable when Drawbridge tries to
-  add a reservation, the endpoint returns an error. Devices wait and retry —
-  they are not provisioned with unvalidated config.
+- **Fail closed everywhere.** If Drawbridge is unreachable when the ZTP
+  script phones home, the script gets no response and exits without
+  provisioning — the device is left with its generic DHCP lease and
+  nothing else. Devices wait and retry — they are not provisioned with
+  unvalidated config.
 
-- **Serial number over MAC.** IOS XE alternates Option 61 between serial and
-  MAC across DHCPDISCOVER retries. Serials are the canonical identifier.
-  MACs are logged but not used as the primary allowlist key.
+- **Serial number over MAC.** The device's own serial (read via `show
+  version`) is the canonical allowlist identifier. MAC is logged for audit
+  but not used for lookup.
+
+- **DHCP client classification by vendor (Option 60) is for per-vendor
+  options, not access control.** Cisco IOS-XE and Juniper Junos ZTP boot
+  differently — different DHCP options pointing at different boot
+  mechanisms — so `kea/kea-dhcp4.conf` uses Kea's native client
+  classification to give each vendor its own `option-data` rather than one
+  global block that can't serve both. Only `cisco-devices` has real options
+  for alpha (`scripts/ztp-base.py`); `juniper-devices` is admitted to the
+  pool already so Junos ZTP support is additive later, but isn't built —
+  out of scope for alpha. This is unrelated to the actual security gate
+  (the script's phone-home call): Option 60 is client-supplied and
+  trivially spoofable, so pool admission by vendor class is a DHCP-options
+  routing decision, not an allowlist. See [kea.md](kea.md).
 
 - **SQLAlchemy ORM.** `Device`, `ProvisioningLog`, `Setting`, and `User` are
   SQLAlchemy models (`drawbridge/models.py`) rather than plain SQL. Sessions
-  are request-scoped and short-lived to keep `/api/lease-event` inside Kea's
-  2 s park timeout. See [database.md](database.md).
+  are request-scoped and short-lived — opened on first use within a request
+  and closed at teardown, not held open across a request's other work. See
+  [database.md](database.md).
 
-- **Drawbridge is not an inventory system — serials/MACs don't persist.**
-  `devices` rows are deleted the moment provisioning completes; only
-  `ProvisioningLog` (timestamp, image, config file) survives, and even that
-  is subject to a retention window. This is a deliberate scope boundary, not
-  an oversight — asset/inventory tracking is a different problem with
-  different data-retention requirements, and bolting it on here would push
-  Drawbridge toward holding data it has no operational need for.
+- **Drawbridge is not an inventory system — serials/MACs don't persist
+  indefinitely.** The `Device` allowlist row persists until an operator
+  explicitly `DELETE`s it (that call itself refuses while a
+  `ProvisioningSession` is still active for that serial — this is what
+  actually prevents concurrent/duplicate provisioning). What's transient is
+  the `ProvisioningSession`, deleted the moment `/api/provision-complete`
+  fires; a `ProvisioningLog` row (timestamp, image, config file) is written
+  in its place, itself subject to a retention window. This is a deliberate
+  scope boundary, not an oversight — asset/inventory tracking is a
+  different problem with different data-retention requirements, and
+  bolting it on here would push Drawbridge toward holding data it has no
+  operational need for.
+
+- **Provisioning gate moved from DHCP-level (Kea hook) to script-level.** A
+  native `leases4_committed` Kea hook was built and found broken in a
+  security-relevant way — `ParkingLotHandle::unpark()` doesn't honor a DROP
+  decision, only `drop()` does (see [kea-hook-findings.md](kea-hook-findings.md))
+  — and it dragged in a hard PostgreSQL requirement for Kea's own
+  hosts-database, since `host_cmds`' `reservation-add`/`reservation-del`
+  have no SQLite/memfile equivalent. Given the threat model (a physically
+  isolated provisioning VLAN, not internet-facing), a real attacker on that
+  VLAN doesn't need Kea's cooperation anyway — it can self-assign an
+  address and hit Drawbridge's HTTP endpoints directly — so withholding the
+  DHCP *lease* itself buys little real protection. The gate now lives in
+  the ZTP script: an unregistered device still gets a normal lease and the
+  generic script, but the script phones home with its own serial (from
+  `show version`, never a DHCP option) before doing anything real, and
+  Drawbridge approves/denies there. Simpler, no native hook, no Postgres
+  requirement for Kea, same practical protection for this threat model.
+  **Accepted non-goal:** `/api/provision-request` is an open route (no auth
+  decorator — there's no secret an anonymous device could hold), so an
+  attacker on the VLAN could enumerate serials via its 404-vs-200 response
+  to fingerprint which devices are registered. Not defended against for
+  alpha — a 404 leaks no config/image/script content, and this attacker
+  already doesn't need Drawbridge's cooperation for anything more
+  damaging. Revisit if the threat model ever includes a less-trusted VLAN.
 
 - **Log retention is an admin-configurable DB setting, default 30 days,
   purged lazily.** `Setting(key='log_retention_days')` is changeable at
@@ -36,16 +80,23 @@
   external message queue" below, at the cost of expired rows lingering
   briefly on idle deployments.
 
-- **SQLite concurrency via WAL + busy_timeout, not a switch to a
-  client/server database.** Gunicorn runs 4 worker processes
-  (`gunicorn.conf.py`), all hitting the same `drawbridge.db` file, so
-  multi-worker race conditions on the DB are a real risk, not theoretical.
-  Rather than move to Postgres/MySQL — more infrastructure for a
-  single-host, physically isolated deployment — concurrency is handled with
-  WAL journal mode, a `busy_timeout` tuned under the lease-event 2 s budget,
-  app-level retry on `database is locked`, short transactions, and
-  per-worker (post-fork) `Engine` creation. See [database.md](database.md)
-  ("Concurrency under multiple Gunicorn workers").
+- **Pluggable SQLite/PostgreSQL backend; SQLite forced to a single
+  Gunicorn worker rather than migrated wholesale to Postgres.** A real,
+  reproducing multi-worker race on SQLite's first-run bootstrap was found
+  under Gunicorn's post-fork worker model (every worker independently
+  racing `CREATE TABLE`/seed rows/admin bootstrap against a fresh
+  `DATABASE_PATH` — see [kea-hook-findings.md](kea-hook-findings.md) #5).
+  Since Drawbridge's own traffic was never throughput-bound (a handful of
+  devices, a few admin users), removing the extra worker processes fixes
+  the root cause more simply than adding a database server: `DATABASE_PATH`
+  pointing at a bare filesystem path (SQLite, the default) forces
+  `workers = 1` in `gunicorn.conf.py`, which is what makes the
+  `fcntl.flock`-based bootstrap lock in `drawbridge/db.py` unconditionally
+  sufficient. Setting `DATABASE_PATH` to a `postgresql+psycopg://...` URL
+  instead allows multiple workers (`WORKERS` env var), using the same
+  bootstrap-lock structure with a `pg_advisory_lock` in place of the file
+  lock. See [database.md](database.md) ("Concurrency under multiple
+  Gunicorn workers").
 
 - **Flask-Login over Flask-Security-Too.** Flask-Login only tracks the
   current session (`current_user`, `login_user()`, `@login_required`) and
@@ -62,9 +113,10 @@
   new routes in `drawbridge/api/auth.py`) is not implemented yet. See
   [authentication.md](authentication.md).
 
-- **No external message queue.** The Kea hook calls the ZTP server directly
-  over HTTP. The PARK mechanism handles the synchronisation. A message queue
-  would add complexity with no benefit at this scale.
+- **No external message queue.** The ZTP script's phone-home call is a
+  plain synchronous HTTP request/response — there's no async coordination
+  problem to solve, and a message queue would add complexity with no
+  benefit at this scale.
 
 - **Rootless Podman for the Drawbridge container.** Kea cannot run rootless
   (requires raw socket for DHCP broadcast) so it runs as a native systemd
@@ -73,3 +125,106 @@
 
 - **Kea Control Agent on 127.0.0.1:8081.** Default Kea port is 8080, which
   conflicts with Drawbridge. Control Agent is bound to loopback only.
+
+- **Facts-first provisioning is deferred, not rejected.** An idea was raised
+  for a two-phase flow: a small facts-collector script fetched first, which
+  reports device facts (e.g. version/platform) to Drawbridge and gets back
+  the appropriate provisioning script to hand off to, rather than one static
+  script for all devices. This is a reasonable pattern for heterogeneous
+  fleets, but it's real Day-0 provisioning logic — the same category the
+  alpha `ztp-base.py` stub deliberately excludes (see alpha.md step 5) — and
+  it requires schema/API additions alpha doesn't have: a version/platform
+  field on `Device`, and a new endpoint (or facts parameter) for the
+  fetch-then-select round trip, plus a second HTTPS/cert-validation hop.
+  Scope this once real per-device provisioning logic is built and tested
+  against hardware, not before.
+
+- **C9200CX network stack isolation — `/api/provision-complete` accepts PUT.**
+  Python scripts running on the C9200CX are entirely isolated from the device's
+  own network stack; direct socket calls from the ZTP script fail. The
+  workaround is to write the JSON payload to the device filesystem and issue
+  `copy flash:status.json http://<drawbridge>/api/provision-complete` from IOS
+  XE CLI (via `cli.execute()` in the script). IOS XE's `copy` command issues a
+  PUT request, so the endpoint accepts PUT as its primary method. POST is also
+  accepted for development and testing. The `Content-Type` header is not
+  guaranteed to be set by `copy`, so the endpoint parses the body regardless of
+  content type (`force=True`). This constraint applies to all network I/O in the
+  ZTP script on C9200CX — image and config downloads must similarly be triggered
+  via `cli.execute("copy http://... flash:")` rather than Python's `urllib` or
+  `requests`.
+
+- **`files.py`'s file-serving routes use `<path:filename>`, not
+  `<string:filename>`.** `<string:...>` excludes `/` from what it matches, so
+  a traversal-looking request like `/files/images/../../main.py` (containing
+  literal `/`) doesn't match `/files/images/<filename>` at all — Werkzeug's
+  router falls through to `main.py`'s SPA catch-all (`/<path:path>`) instead,
+  which never 404s by design (it serves the exact static asset or falls back
+  to `index.html`), silently returning `200` with the SPA shell rather than
+  the file-serving blueprint's own `404 file_not_found`. This only becomes
+  visible once `drawbridge/static/` actually exists (i.e. the frontend has
+  been built — the normal state in production and from step 8 onward), which
+  is why it wasn't caught earlier. `<path:filename>` fixes it correctly:
+  the request now reaches this blueprint's own `get_file()` DB lookup, which
+  always misses for a traversal attempt (stored filenames are sanitized via
+  `secure_filename()` at upload time and can never contain `/` or `..`), so
+  it 404s cleanly. `send_from_directory`'s own `safe_join` is a second,
+  independent layer even if that lookup somehow passed. Don't revert this to
+  `<string:filename>` for a "no slashes in filenames" cleanliness reason —
+  it reopens exactly this gap.
+
+- **Bootstrap admin password sources aren't treated equally for forced
+  reset.** Three ways to seed the bootstrap admin's initial password now
+  exist (see [authentication.md](authentication.md)): a systemd credential,
+  the `ADMIN_PASSWORD` env var, or the default random-generated password.
+  Only the systemd credential skips `User.must_reset_password`. The
+  dividing line isn't "who chose the password" (an operator vs. the app
+  itself) — it's whether the plaintext ends up somewhere durable and
+  outside the app's control. A systemd credential is exposed to the
+  process only via a private, per-invocation `$CREDENTIALS_DIRECTORY` and
+  never appears in `podman inspect`/`systemctl show`/`/proc/*/environ`, so
+  there's nothing gained by forcing a reset. `ADMIN_PASSWORD` has to sit in
+  plaintext somewhere durable (a Quadlet unit's `Environment=` line, a
+  `.env` file) for the container to read it on every restart. The
+  random-generated default was originally exempted on the theory that
+  printing it once and never persisting it *within the app* was enough —
+  but that conflated app-level persistence with infrastructure-level
+  persistence: container stdout routinely ends up retained indefinitely in
+  journald or shipped to log-aggregation systems with broader read access
+  than a single config file, so a high-entropy password printed to stdout
+  is exposed the same way an env var is, just through a different channel.
+  Both now force a reset. Forced reset uses a dedicated
+  `POST /api/auth/reset-password` route rather than the existing
+  session-based `/change-password`, since no session exists yet at that
+  point — `login()` validates credentials but deliberately withholds a
+  session while the flag is set.
+
+- **`install.sh`'s curl-pipe fetch is pinned to a branch ref, not a release
+  tag — revisit once real releases start.** When `install.sh` is run via
+  `curl | sudo bash` there's no sibling `kea/` directory to read from, so it
+  fetches `kea/kea-dhcp4.conf`/`kea/kea-ctrl-agent.conf` from
+  `raw.githubusercontent.com` at a hardcoded ref (`RAW_BASE`). That same ref
+  is duplicated in `README.md`'s curl one-liner, and a CI check
+  (`.github/workflows/ci.yml`) fails the build if the
+  two diverge — but the check only catches the two copies disagreeing with
+  each other, not the underlying problem: a branch name is a moving target,
+  so the URL anyone copies today silently serves whatever lands on that
+  branch tomorrow, not a fixed point in time. There's no release process yet
+  (see [alpha.md](../alpha.md)), so this is accepted for now. Once real
+  releases start post-alpha, repoint both at a release tag instead — e.g.
+  resolve `latest` via the GitHub Releases API — so the one-liner installs a
+  fixed, reproducible version rather than tip-of-branch.
+
+- **`DRAWBRIDGE_PORT` controls where the app listens, but two other
+  hardcoded `8080`s aren't wired to it.** `drawbridge/gunicorn.conf.py`'s
+  bind, `dev.sh`'s `flask run --port`, and `frontend/vite.config.js`'s
+  dev-proxy target all read this env var (default `8080`). `kea/kea-dhcp4.conf`'s
+  Option 67 boot-file URL and `scripts/ztp-base.py`'s own `DRAWBRIDGE_PORT`
+  constant do not, and can't cleanly: the Kea config is a static file (no
+  templating layer — see [kea.md](kea.md)), and the ZTP script runs on the
+  device itself (IOS XE Guestshell), an entirely separate machine with no
+  access to the server's environment. Changing `DRAWBRIDGE_PORT` from its
+  default therefore means updating both of those by hand too, or devices
+  will phone home to the wrong port. Not worth solving with a templating
+  system for a value that's expected to change rarely, if ever, in a given
+  deployment — but worth flagging clearly at each of the three spots (and
+  here) so it isn't mistaken for a single source of truth.

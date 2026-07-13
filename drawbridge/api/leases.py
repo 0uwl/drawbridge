@@ -1,0 +1,90 @@
+from flask import Blueprint, request
+
+from drawbridge.db import get_session
+from drawbridge.queries import get_device, get_provisioning_session, create_provisioning_session, delete_provisioning_session, add_log_entry
+from drawbridge.utils import error_response, success_response
+
+def create_blueprint():
+    bp = Blueprint('leases', __name__)
+
+    @bp.get('/provision-request')
+    def provision_request():
+        """Called by the ZTP script's phone-home step on boot (see
+        scripts/ztp-base.py) — a plain GET with query-string params, since
+        IOS XE's `copy` primitive (the only network I/O available from
+        Guestshell, see docs/decisions.md) can't attach a request body.
+        Open route, no auth decorator — same posture as /provision-complete
+        below: gated by the serial lookup itself, not by caller identity."""
+        serial = request.args.get('serial')
+        if not serial:
+            return error_response('Request is missing required parameter serial', 'missing_parameter', code=422)
+
+        mac = request.args.get('mac')  # optional, audit/logging only — not used for lookup
+
+        session = get_session()
+        device = get_device(session, serial)
+
+        if device is None:
+            return error_response(f'{serial} not found', 'device_not_found', code=404)
+
+        create_provisioning_session(
+            session,
+            serial=serial,
+            mac=mac,
+            ip=request.remote_addr,
+            image=device.image,
+            config_file=device.config_file,
+        )
+        session.commit()
+
+        return success_response(f'{serial} approved', payload=device.as_dict())
+
+    @bp.route('/provision-complete', methods=['PUT', 'POST'])
+    def provision_complete():
+        # force=True: IOS XE `copy` sends PUT without Content-Type: application/json
+        data = request.get_json(force=True, silent=True)
+        if data is None:
+            return error_response('Empty request body', 'empty_request_body', code=422)
+
+        serial = data.get('serial')
+        if serial is None:
+            return error_response('Request body is missing required parameter serial', 'missing_parameter', code=422)
+
+        event = data.get('event', 'provision_complete')
+        detail = data.get('detail')
+
+        session = get_session()
+        active = get_provisioning_session(session, serial)
+
+        if active is None:
+            return error_response(f'{serial} is not in active provisioning', 'device_not_active', code=404)
+
+        # Falls back to the session's assigned image/config_file (set at
+        # approval time from the Device row — see provision_request above)
+        # when the device doesn't explicitly report its own. The alpha
+        # scripts/ztp-base.py stub never does, so without this the log
+        # would show blank image/config for every real completion despite
+        # the assignment being known.
+        image = data.get('image')
+        if image is None:
+            image = active.image
+
+        config_file = data.get('config_file')
+        if config_file is None:
+            config_file = active.config_file
+
+        add_log_entry(
+            session,
+            serial=serial,
+            event=event,
+            ip=active.ip,
+            image=image,
+            config_file=config_file,
+            detail=detail,
+        )
+        delete_provisioning_session(session, serial)
+        session.commit()
+
+        return success_response(f'{serial} provisioning recorded')
+
+    return bp

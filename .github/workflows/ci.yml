@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: pytest -v
+      # install.sh's RAW_BASE (used when it's piped via curl, with no
+      # sibling kea/*.conf on disk) and the curl one-liner in README.md
+      # both hardcode the same branch ref by hand — see docs/decisions.md
+      # ("install.sh's curl-pipe fetch is pinned to a branch ref"). This
+      # catches one of them getting renamed without the other.
+      - run: |
+          raw_base=$(grep -oP '^RAW_BASE="\K[^"]+' install.sh)
+          readme_base=$(grep -oP 'curl -fsSL \K\S+(?=/install\.sh)' README.md)
+          if [ -z "$raw_base" ] || [ -z "$readme_base" ]; then
+            echo "Could not extract RAW_BASE from install.sh or the curl URL from README.md" >&2
+            exit 1
+          fi
+          if [ "$raw_base" != "$readme_base" ]; then
+            echo "install.sh RAW_BASE ($raw_base) != README.md curl URL base ($readme_base)" >&2
+            exit 1
+          fi
+          echo "OK: both point at $raw_base"
+
+  publish:
+    name: Publish container
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Containerfile builds the Vue frontend in its own stage (see
+      # docs/frontend.md, docs/deployment.md) — no separate frontend build
+      # step needed here.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}:latest

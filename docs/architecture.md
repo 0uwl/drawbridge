@@ -34,26 +34,26 @@ Provisioning VLAN
 │  Ubuntu host (dedicated provisioning machine)       │
 │                                                     │
 │  ┌─────────────────────┐                            │
-│  │  Kea DHCPv4         │  native systemd service    │
-│  │  port 67 (UDP)      │  runs as _kea user         │
-│  │                     │                            │
-│  │  leases4_committed  │────  PARK ──────────────┐  │
-│  │  hook (host_cmds +  │                         │  │
-│  │  custom callout)    │◄───  approve/deny ──────┘  │
-│  └─────────────────────┘         │                  │
-│  │  Kea Control Agent  │         │                  │
-│  │  127.0.0.1:8081     │◄──  reservation-add/del ─┐ │
-│  └─────────────────────┘                          │ │
-│                                                   │ │
-│  ┌─────────────────────────────────────────────┐  │ │
-│  │  Drawbridge container (rootless Podman)     │  │ │
-│  │  user: drawbridge                           │  │ │
-│  │  image: localhost/drawbridge:latest         │  │ │
-│  │                                             │  │ │
-│  │  Flask app, port 8080                       │──┘ │
-│  │  published to 127.0.0.1:8080                │    │
+│  │  Kea DHCPv4         │  native systemd service,   │
+│  │  port 67 (UDP)      │  vanilla config — no       │
+│  │                     │  hooks, no host             │
+│  │                     │  reservations               │
+│  └─────────────────────┘                            │
+│  ┌─────────────────────┐                            │
+│  │  Kea Control Agent  │  operator diagnostics only  │
+│  │  127.0.0.1:8081     │  (kea-shell) — Drawbridge    │
+│  └─────────────────────┘  never calls it            │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  Drawbridge container (rootless Podman)     │    │
+│  │  user: drawbridge                           │    │
+│  │  image: localhost/drawbridge:latest         │    │
 │  │                                             │    │
-│  │  /app/drawbridge.db   (SQLite)         │    │
+│  │  Flask app, port 8080 (DRAWBRIDGE_PORT) —    │    │
+│  │  devices phone home here directly           │    │
+│  │  (/api/provision-request)                   │    │
+│  │                                             │    │
+│  │  /app/data/drawbridge.db (SQLite)           │    │
 │  │  /app/scripts/      (ZTP Python scripts)    │    │
 │  └─────────────────────────────────────────────┘    │
 │                                                     │
@@ -65,24 +65,46 @@ Provisioning VLAN
 
 ## DHCP Flow
 
-1. IOS XE device boots with no startup config, sends DHCPDISCOVER
-2. Kea receives it and fires `leases4_committed` callout, **parking** the packet
-3. Callout POSTs to `http://127.0.0.1:8080/api/lease-event` with serial + MAC
-4. Drawbridge checks SQLite allowlist — if known, returns 200; if unknown, 403
-5. On 200: Kea unparks, sends DHCPACK with Option 67 URL pointing at Drawbridge
-6. On 403 or timeout: Kea drops the packet (fail closed)
-7. Device fetches the ZTP script over HTTPS, verifies server cert and payload hash
-8. Script provisions the device, POSTs completion status back to Drawbridge
-9. Drawbridge calls Kea Control Agent `reservation-del` to remove the device
-   from the allowlist, preventing accidental re-provisioning, and deletes
-   the device's row from the SQLite `devices` table in the same request —
-   the serial/MAC don't persist past this point; a `ProvisioningLog` row
-   (time, image, config file) is written in its place
+Kea runs no custom hooks and no host reservations. The allow/deny gate
+lives in the ZTP script itself, not at the DHCP layer (see
+[decisions.md](decisions.md) for why: a native Kea hook was built and
+found broken in a security-relevant way, and for this threat model — a
+physically isolated provisioning VLAN, not internet-facing — withholding
+the DHCP lease itself buys little real protection against a capable
+attacker anyway). Kea does use native client classification on Option 60
+(vendor-class-identifier) to admit only Cisco/Juniper-looking clients to
+the pool and hand each vendor its own DHCP options (see
+[kea.md](kea.md)) — Cisco and Juniper ZTP boot differently and need
+different options, which is what this is actually for, not access control.
+Only the Cisco path has real options configured for alpha; Juniper is
+admitted to the pool already but has no ZTP support built yet. Option 60
+is client-supplied and trivially spoofable regardless, so this is never a
+substitute for the script-level gate below.
 
-Note: IOS XE alternates DHCP Client Identifier (Option 61) between the device
-serial number and the management port MAC address across retries. The allowlist
-should support matching on either. Serial numbers are preferred as they are
-meaningful to inventory systems.
+1. IOS XE device boots with no startup config, sends DHCPDISCOVER
+2. Kea leases an address from the dynamic pool to any client matching the
+   vendor-class filter and, for Cisco, returns Option 67 pointing at the
+   generic ZTP script — every matching Cisco device gets this, registered
+   or not
+3. Device fetches the ZTP script over HTTPS, verifies server cert and payload hash
+4. Script's first action: reads its own serial via `show version`, calls
+   `GET /api/provision-request?serial=...`
+5. Drawbridge checks the SQLite allowlist by serial — known → 200 + a
+   `ProvisioningSession` row is created; unknown → 404
+6. On 404 (or if Drawbridge is unreachable): script exits cleanly, no
+   further action — the device is left with its generic DHCP lease and
+   nothing else, no image/config/real script logic runs
+7. On 200: script proceeds with real provisioning (image/config download,
+   hash verification, config push — a later phase; see alpha.md step 5)
+8. Script reports completion by writing a JSON status file and issuing
+   `copy flash:status.json http://<drawbridge>/api/provision-complete` (IOS XE
+   `copy` sends a PUT — see [decisions.md](decisions.md) "C9200CX network stack isolation")
+9. Drawbridge writes a `ProvisioningLog` row (time, image, config file) and
+   deletes the `ProvisioningSession` row — the `Device` allowlist row
+   itself is **not** touched here; it persists until an operator explicitly
+   `DELETE`s it (which itself refuses while a session is still active —
+   that's what actually prevents concurrent/duplicate provisioning, not
+   anything DHCP-side)
 
 ## Repository Layout
 
@@ -102,17 +124,15 @@ drawbridge/
 ├── quadlet/
 │   └── drawbridge.container   ← Podman Quadlet for the drawbridge user
 ├── kea/
-│   ├── kea-dhcp4.conf         ← Kea DHCPv4 configuration
-│   ├── kea-ctrl-agent.conf    ← Kea Control Agent (REST API, 127.0.0.1:8081)
-│   └── hook/                  ← Python leases4_committed callout
-│       └── ...
+│   ├── kea-dhcp4.conf         ← Kea DHCPv4 configuration (vanilla — no hook)
+│   └── kea-ctrl-agent.conf    ← Kea Control Agent (REST API, 127.0.0.1:8081; operator diagnostics only)
 ├── drawbridge/
 │   ├── __init__.py
 │   ├── main.py                ← Flask app factory and entry point
 │   ├── api/
-│   │   ├── lease.py           ← POST /api/lease-event (called by Kea hook)
+│   │   ├── leases.py          ← GET /api/provision-request (called by the ZTP script's phone-home step)
 │   │   ├── devices.py         ← CRUD for device allowlist
-│   │   ├── scripts.py         ← ZTP script management endpoints
+│   │   ├── files.py           ← File management endpoints
 │   │   ├── auth.py            ← login/logout, current-user endpoints
 │   │   ├── users.py           ← admin CRUD for operator accounts
 │   │   └── settings.py        ← admin get/set of log-retention setting
@@ -121,7 +141,6 @@ drawbridge/
 │   ├── auth.py                ← Flask-Login setup (LoginManager, user_loader,
 │   │                             password hashing); future home for the SAML
 │   │                             SP integration (see authentication.md)
-│   ├── kea.py                 ← Kea Control Agent client (reservation-add/del)
 │   └── static/                ← built frontend output (generated, gitignored — see frontend.md)
 ├── scripts/
 │   └── ztp-base.py            ← Base ZTP script served to IOS XE devices
