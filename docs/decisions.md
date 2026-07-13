@@ -152,3 +152,63 @@
   ZTP script on C9200CX — image and config downloads must similarly be triggered
   via `cli.execute("copy http://... flash:")` rather than Python's `urllib` or
   `requests`.
+
+- **`files.py`'s file-serving routes use `<path:filename>`, not
+  `<string:filename>`.** `<string:...>` excludes `/` from what it matches, so
+  a traversal-looking request like `/files/images/../../main.py` (containing
+  literal `/`) doesn't match `/files/images/<filename>` at all — Werkzeug's
+  router falls through to `main.py`'s SPA catch-all (`/<path:path>`) instead,
+  which never 404s by design (it serves the exact static asset or falls back
+  to `index.html`), silently returning `200` with the SPA shell rather than
+  the file-serving blueprint's own `404 file_not_found`. This only becomes
+  visible once `drawbridge/static/` actually exists (i.e. the frontend has
+  been built — the normal state in production and from step 8 onward), which
+  is why it wasn't caught earlier. `<path:filename>` fixes it correctly:
+  the request now reaches this blueprint's own `get_file()` DB lookup, which
+  always misses for a traversal attempt (stored filenames are sanitized via
+  `secure_filename()` at upload time and can never contain `/` or `..`), so
+  it 404s cleanly. `send_from_directory`'s own `safe_join` is a second,
+  independent layer even if that lookup somehow passed. Don't revert this to
+  `<string:filename>` for a "no slashes in filenames" cleanliness reason —
+  it reopens exactly this gap.
+
+- **Bootstrap admin password sources aren't treated equally for forced
+  reset.** Three ways to seed the bootstrap admin's initial password now
+  exist (see [authentication.md](authentication.md)): a systemd credential,
+  the `ADMIN_PASSWORD` env var, or the default random-generated password.
+  Only the systemd credential skips `User.must_reset_password`. The
+  dividing line isn't "who chose the password" (an operator vs. the app
+  itself) — it's whether the plaintext ends up somewhere durable and
+  outside the app's control. A systemd credential is exposed to the
+  process only via a private, per-invocation `$CREDENTIALS_DIRECTORY` and
+  never appears in `podman inspect`/`systemctl show`/`/proc/*/environ`, so
+  there's nothing gained by forcing a reset. `ADMIN_PASSWORD` has to sit in
+  plaintext somewhere durable (a Quadlet unit's `Environment=` line, a
+  `.env` file) for the container to read it on every restart. The
+  random-generated default was originally exempted on the theory that
+  printing it once and never persisting it *within the app* was enough —
+  but that conflated app-level persistence with infrastructure-level
+  persistence: container stdout routinely ends up retained indefinitely in
+  journald or shipped to log-aggregation systems with broader read access
+  than a single config file, so a high-entropy password printed to stdout
+  is exposed the same way an env var is, just through a different channel.
+  Both now force a reset. Forced reset uses a dedicated
+  `POST /api/auth/reset-password` route rather than the existing
+  session-based `/change-password`, since no session exists yet at that
+  point — `login()` validates credentials but deliberately withholds a
+  session while the flag is set.
+
+- **`DRAWBRIDGE_PORT` controls where the app listens, but two other
+  hardcoded `8080`s aren't wired to it.** `drawbridge/gunicorn.conf.py`'s
+  bind, `dev.sh`'s `flask run --port`, and `frontend/vite.config.js`'s
+  dev-proxy target all read this env var (default `8080`). `kea/kea-dhcp4.conf`'s
+  Option 67 boot-file URL and `scripts/ztp-base.py`'s own `DRAWBRIDGE_PORT`
+  constant do not, and can't cleanly: the Kea config is a static file (no
+  templating layer — see [kea.md](kea.md)), and the ZTP script runs on the
+  device itself (IOS XE Guestshell), an entirely separate machine with no
+  access to the server's environment. Changing `DRAWBRIDGE_PORT` from its
+  default therefore means updating both of those by hand too, or devices
+  will phone home to the wrong port. Not worth solving with a templating
+  system for a value that's expected to change rarely, if ever, in a given
+  deployment — but worth flagging clearly at each of the three spots (and
+  here) so it isn't mistaken for a single source of truth.

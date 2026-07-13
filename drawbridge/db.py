@@ -13,6 +13,7 @@ from drawbridge.models import Base, Setting, User
 
 ADMIN_USERNAME = 'admin'
 ADMIN_PASSWORD_LENGTH = 12
+ADMIN_CREDENTIAL_NAME = 'admin_password'
 
 # Arbitrary but fixed pg_advisory_lock key for the bootstrap critical
 # section below — any future second advisory lock should pick a different
@@ -63,7 +64,7 @@ def _bootstrap_once(app, engine, session_factory):
             _seed_default_config_file(session, app)
             _seed_default_script(session, app)
             if is_first_run:
-                _bootstrap_admin(session)
+                _bootstrap_admin(session, app)
             session.commit()
 
 
@@ -191,21 +192,70 @@ def _seed_default_script(session, app):
         session.add(Setting(key='default_script', value=value))
 
 
-def _bootstrap_admin(session):
+def _initial_admin_password(app) -> tuple[str, bool, str]:
+    """Resolves the bootstrap admin's initial password and whether it must
+    be reset on first login, in priority order (see docs/authentication.md,
+    "Bootstrap admin password sources"). The dividing line for forcing a
+    reset isn't "who chose the password" — it's whether the plaintext ends
+    up somewhere durable and outside the app's control:
+
+    1. A systemd credential named 'admin_password' (LoadCredential=, read
+       via $CREDENTIALS_DIRECTORY) — exposed to the process only via a
+       private, per-invocation directory, never logged or persisted
+       anywhere else. The only source that doesn't force a reset.
+    2. ADMIN_PASSWORD, a plaintext env var — has to persist at rest
+       somewhere (a Quadlet unit, a .env file) to survive restarts.
+    3. The default: a freshly generated random password, printed to
+       stdout once. High entropy doesn't help here — the risk isn't
+       guessing, it's that container stdout routinely ends up retained
+       indefinitely in journald or shipped to log-aggregation
+       infrastructure with broader read access than a single config file.
+       Both (2) and (3) force a reset for this reason.
+    """
+    creds_dir = app.config.get('CREDENTIALS_DIRECTORY')
+    if creds_dir:
+        cred_path = Path(creds_dir) / ADMIN_CREDENTIAL_NAME
+        if cred_path.is_file():
+            content = cred_path.read_text().strip()
+            if content:
+                return content, False, 'credential'
+
+    env_password = app.config.get('ADMIN_PASSWORD')
+    if env_password:
+        return env_password, True, 'env'
+
     alphabet = string.ascii_letters + string.digits
     password = ''.join(secrets.choice(alphabet) for _ in range(ADMIN_PASSWORD_LENGTH))
+    return password, True, 'generated'
+
+
+def _bootstrap_admin(session, app):
+    password, must_reset, source = _initial_admin_password(app)
 
     session.add(User(
         username=ADMIN_USERNAME,
         role='admin',
         auth_source='local',
         password_hash=generate_password_hash(password),
+        must_reset_password=must_reset,
     ))
 
-    print(
-        f"Drawbridge: created initial admin user '{ADMIN_USERNAME}', "
-        f"password: {password} — record this now, it will not be shown again."
-    )
+    if source == 'credential':
+        print(
+            f"Drawbridge: created initial admin user '{ADMIN_USERNAME}' from the "
+            f"'{ADMIN_CREDENTIAL_NAME}' systemd credential."
+        )
+    elif source == 'env':
+        print(
+            f"Drawbridge: created initial admin user '{ADMIN_USERNAME}' from "
+            f"ADMIN_PASSWORD — a password reset will be required on first login."
+        )
+    else:
+        print(
+            f"Drawbridge: created initial admin user '{ADMIN_USERNAME}', "
+            f"password: {password} — record this now, it will not be shown again. "
+            f"A password reset will be required on first login."
+        )
 
 
 def _close_session(exception=None):

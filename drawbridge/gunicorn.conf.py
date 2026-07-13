@@ -16,7 +16,7 @@ else:
     workers = int(os.environ.get('WORKERS', '4'))
 
 timeout = 120
-bind = '0.0.0.0:8080'
+bind = f"0.0.0.0:{os.environ.get('DRAWBRIDGE_PORT', '8080')}"
 accesslog = None
 errorlog = '-'
 capture_output = False

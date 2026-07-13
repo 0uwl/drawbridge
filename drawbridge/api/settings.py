@@ -9,6 +9,7 @@ from drawbridge.queries import (
     delete_user,
     get_setting,
     get_user_by_id,
+    list_provisioning_log,
     list_users,
     set_setting,
 )
@@ -89,6 +90,13 @@ def create_blueprint():
 
             case _:
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
+
+    @bp.get('/log')
+    @login_required
+    def get_log():
+        session = get_session()
+        entries = list_provisioning_log(session)
+        return success_response('Provisioning log', payload=[e.as_dict() for e in entries])
 
     @bp.get('/settings/log-retention')
     @login_required

@@ -34,6 +34,7 @@
 | GET | `/api/auth/me` | Current authenticated operator (id, username, role, auth_source) |
 | POST | `/api/auth/claim` | First-time password creation for an admin-created local account (`username` + `password`, unauthenticated) |
 | POST | `/api/auth/change-password` | Change the current user's own password (`current_password` + `new_password`, any role) |
+| POST | `/api/auth/reset-password` | Completes a forced password reset (`username` + `current_password` + `new_password`, unauthenticated). Only succeeds when `must_reset_password` is set — see [authentication.md](authentication.md) |
 | GET | `/api/users` | List operator accounts (admin only) |
 | POST | `/api/users` | Create an operator account with no password set yet (admin only) |
 | PUT | `/api/users/<id>` | Change an operator's role (admin only) |

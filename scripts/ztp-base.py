@@ -16,7 +16,11 @@ import urllib.parse
 import urllib.request
 
 # Must match the host/port devices reach Drawbridge on (see Option 67 in
-# kea/kea-dhcp4.conf and the Drawbridge deployment config).
+# kea/kea-dhcp4.conf). This script runs on the device (IOS XE Guestshell),
+# not the server, so it can't read the server's DRAWBRIDGE_PORT env var
+# (see docs/deployment.md) — update this constant by hand, along with
+# kea-dhcp4.conf's Option 67 URL, if the server's port ever changes from
+# the default. See docs/decisions.md.
 DRAWBRIDGE_HOST = '192.168.100.1'
 DRAWBRIDGE_PORT = 8080
 

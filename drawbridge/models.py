@@ -143,5 +143,6 @@ class User(Base, UserMixin):
     saml_issuer: Mapped[str | None]     # IdP entity ID, set once SAML lands
     saml_subject: Mapped[str | None]    # IdP NameID, set once SAML lands
     is_active: Mapped[bool] = mapped_column(default=True)
+    must_reset_password: Mapped[bool] = mapped_column(default=False)  # see docs/authentication.md
     created_at: Mapped[str] = mapped_column(default=utcnow_iso)
     last_login_at: Mapped[str | None]

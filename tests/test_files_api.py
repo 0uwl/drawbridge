@@ -207,9 +207,15 @@ def test_serve_returns_404_for_missing_file(client, route, filename):
     '%2e%2e%2f%2e%2e%2fmain.py',
 ])
 def test_serve_rejects_path_traversal_attempts(client, route, escaped_path):
-    """The <string:filename> route converter excludes '/', so an escaping
-    segment never reaches send_from_directory or the DB lookup — this locks
-    that behavior in rather than changing it."""
+    """The <path:filename> route converter accepts '/', so a traversal
+    attempt reaches this blueprint's own get_file() DB lookup rather than
+    falling through route-matching to main.py's SPA catch-all (which would
+    otherwise silently serve index.html with a 200 for any unmatched path —
+    see docs/decisions.md). No stored ZTPFile row can contain '/' or '..'
+    (filenames are sanitized via secure_filename() at upload time), so the
+    lookup always misses and this 404s cleanly; send_from_directory's own
+    safe_join is a second, independent layer even if that lookup somehow
+    passed."""
     response = client.get(f'{BASE}/{route}/{escaped_path}')
     assert response.status_code == 404
 

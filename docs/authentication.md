@@ -29,8 +29,52 @@ other accounts — they have no access to `/api/users`. Only admins can create
 accounts, change roles, or delete accounts.
 
 **First admin** — bootstrapped on first startup (see
-[decisions.md](decisions.md) / `alpha.md`): username `admin`, a random
-password printed to stdout once.
+[decisions.md](decisions.md) / `alpha.md`): username `admin`, password
+sourced per "Bootstrap admin password sources" below.
+
+### Bootstrap admin password sources
+
+`drawbridge/db.py`'s `_initial_admin_password()` resolves the bootstrap
+admin's password in this priority order, each seeded only on first run (the
+missing-DB-file gate — same as the rest of `_bootstrap_once`). The line
+between forcing a reset and not isn't "who chose the password" — it's
+whether the plaintext ends up somewhere durable and outside the app's
+control:
+
+1. **A systemd credential** named `admin_password` — read from
+   `$CREDENTIALS_DIRECTORY/admin_password` when `LoadCredential=` (or
+   `SetCredential=`) supplies one (see [deployment.md](deployment.md)). The
+   only source that doesn't force a reset: the plaintext is exposed to the
+   process only via a private, per-invocation directory, and never appears
+   in `podman inspect`, `/proc/*/environ`, `systemctl show`, or any log.
+2. **`ADMIN_PASSWORD`**, a plaintext env var. This value has to persist at
+   rest somewhere (a Quadlet unit's `Environment=` line, a `.env` file) for
+   the container to read it on every restart, so it's a standing plaintext
+   credential for as long as that file exists. An empty or unset
+   `ADMIN_PASSWORD` falls through to the next source, not to an empty
+   password.
+3. **The default**: a random 12-character password (`secrets.choice`),
+   printed to stdout once. High entropy doesn't help here — the risk isn't
+   guessing, it's that container stdout routinely ends up retained
+   indefinitely in journald or shipped to log-aggregation infrastructure
+   with broader read access than a single config file. The password itself
+   is only ever shown this once, but the log line containing it typically
+   outlives that.
+
+Sources 2 and 3 both set `User.must_reset_password` on the bootstrap admin
+to bound that exposure window — `login()` validates the password normally
+but withholds a session (`POST /api/v1/auth/login` returns
+`{must_reset_password: true, username}` instead of a logged-in session)
+until `POST /api/v1/auth/reset-password` (`username`, `current_password`,
+`new_password`) is called, which sets a new password, clears the flag, and
+establishes the session itself.
+
+`reset-password` is deliberately a separate, unauthenticated-by-necessity
+route rather than an extension of `/auth/change-password`: it's the only
+way to complete a reset when no session exists yet, and gating it on
+`must_reset_password` being set means it can't be used as a back door
+around the normal, session-based change-password flow for accounts that
+don't need one.
 
 **Subsequent accounts** — an admin creates a user with just a username and a
 role via `POST /api/users`. No password is set at creation time

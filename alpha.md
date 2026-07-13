@@ -56,13 +56,21 @@ checklist (step 7) is still in progress.
 - **First-admin bootstrap**, triggered from `init_db(app)` in `db.py`: check
   whether `DATABASE_PATH` exists on disk *before* `create_all()` runs. If it
   doesn't (first run), after creating the schema, insert
-  `User(username='admin', role='admin', auth_source='local')` with a
-  randomly generated 12-character password (`secrets.choice` over
-  letters+digits — cryptographically random, not `random`), hash it with
-  Werkzeug, and print the plaintext password to stdout once:
+  `User(username='admin', role='admin', auth_source='local')` with its
+  initial password resolved by `_initial_admin_password()` in priority order
+  — a systemd credential (`admin_password`, via `$CREDENTIALS_DIRECTORY`),
+  else the `ADMIN_PASSWORD` env var, else the default: a randomly generated
+  12-character password (`secrets.choice` over letters+digits —
+  cryptographically random, not `random`), hash it with Werkzeug, and print
+  the plaintext password to stdout once:
   `Drawbridge: created initial admin user 'admin', password: <pw> — record this now, it will not be shown again.`
-  This only ever fires on the missing-DB-file path, never on subsequent
-  starts against an existing DB.
+  Every source except the systemd credential sets `User.must_reset_password`
+  (including the random default — a printed password is exposed the same
+  way an env var is, just via stdout/journald instead of a config file),
+  enforced by `POST /api/auth/login`/`POST /api/auth/reset-password` — see
+  [docs/authentication.md](docs/authentication.md) ("Bootstrap admin
+  password sources") for the full reasoning. This only ever fires on the
+  missing-DB-file path, never on subsequent starts against an existing DB.
 
 ### 3. Kea integration (SUPERSEDED — not built)
 A Kea Control Agent client (`reservation-add`/`reservation-del`) was
@@ -140,12 +148,19 @@ Fill out `tests/` per [docs/testing.md](docs/testing.md)'s checklist:
 mocking needed — nothing in the request path calls Kea. Include the
 multi-worker-style concurrent-write test.
 
-### 8. Minimal frontend
-Stack: Vue Router for navigation, **Pinia** for state, **axios** for HTTP.
+### 8. Minimal frontend (DONE)
+Stack: Vue Router for navigation, **Pinia** for state, **axios** for HTTP,
+styled with **Tailwind CSS v4** + **DaisyUI v5** components (CSS-first
+config via `@tailwindcss/vite` — no `tailwind.config.js`/`postcss.config.js`;
+see [docs/frontend.md](docs/frontend.md) "Styling").
 API access is centralized in Pinia stores, not components — components call
 store actions and read store state; they never import axios directly. This
 keeps each domain's request/error/loading handling in one place regardless
 of where in the tree a component sits.
+
+`GET /api/log` (backing `log.js`) was missing from `drawbridge/api/*.py`
+despite being documented — added to `settings.py` alongside its query in
+`queries.py` as part of this step, since the Log view depends on it.
 
 - `frontend/src/api/client.js` — single configured axios instance
   (`withCredentials: true` for session cookies, a response interceptor that
@@ -171,7 +186,30 @@ of where in the tree a component sits.
   simulate a provision-request via curl, confirm it shows in the log, remove
   the device.
 
-### 9. End-to-end manual verification (no live Kea)
+### 9. GitHub CI/CD pipeline
+Not implemented yet — deferred until the frontend (step 8) exists, since
+there's nothing meaningful to build/publish before then. Planned shape only:
+
+- GitHub Actions workflow (e.g. `.github/workflows/ci.yml`), triggered on
+  push/PR to `main` at minimum.
+- Jobs, in order, later jobs gated on earlier ones passing:
+  1. **Test** — set up Python, install `requirements.txt`, run the full
+     `pytest` suite from step 7.
+  2. **Build frontend** — set up Node, `npm ci && npm run build` under
+     `frontend/`. May end up folded into the container build job instead of
+     standing alone, since the Containerfile ([docs/deployment.md](docs/deployment.md))
+     already builds the frontend as its own multi-stage stage — decide when
+     implementing.
+  3. **Publish container** — build the multi-stage Containerfile and push to
+     GitHub Container Registry (`ghcr.io/<org>/drawbridge`), authenticating
+     with the workflow's built-in `GITHUB_TOKEN` (no separate PAT needed for
+     same-repo/org GHCR pushes).
+- Tagging strategy (e.g. `latest` on `main`, semver on release tags) not yet
+  decided — revisit alongside the frontend work.
+- Sits as a gate before step 10: end-to-end verification should exercise the
+  same container artifact this pipeline publishes, not a one-off local build.
+
+### 10. End-to-end manual verification (no live Kea)
 - `pytest` green.
 - `flask run` + curl sequence simulating the full flow against
   `/api/provision-request` and `/api/provision-complete` by hand, confirming

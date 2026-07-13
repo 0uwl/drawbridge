@@ -1,6 +1,6 @@
 from drawbridge.db import get_session
 from drawbridge.models import Setting, User
-from drawbridge.queries import get_user_by_username
+from drawbridge.queries import add_log_entry, get_user_by_username
 
 BASE = '/api/v1'
 
@@ -144,6 +144,30 @@ def test_delete_user_allows_deleting_admin_when_another_admin_exists(app, logged
     # bootstrap 'admin' still exists, so deleting admin_user is fine
     response = logged_in_admin_client.delete(f'{BASE}/users/{admin_user.id}')
     assert response.status_code == 200
+
+
+# GET /api/v1/log
+
+def test_list_log_returns_401_when_not_logged_in(client):
+    response = client.get(f'{BASE}/log')
+    assert response.status_code == 401
+
+
+def test_list_log_returns_200_for_operator(app, logged_in_client):
+    with app.app_context():
+        add_log_entry(get_session(), serial='FJC2517X0AB', event='provision_complete')
+        get_session().commit()
+
+    response = logged_in_client.get(f'{BASE}/log')
+    assert response.status_code == 200
+    serials = {e['serial'] for e in response.get_json()['payload']}
+    assert 'FJC2517X0AB' in serials
+
+
+def test_list_log_returns_200_for_admin(logged_in_admin_client):
+    response = logged_in_admin_client.get(f'{BASE}/log')
+    assert response.status_code == 200
+    assert response.get_json()['payload'] == []
 
 
 # GET /api/v1/settings/log-retention

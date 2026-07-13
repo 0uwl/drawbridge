@@ -129,7 +129,7 @@ def create_blueprint():
     bp = Blueprint('ztp', __name__)
 
     @bp.route('/images', defaults={'filename': None}, methods=['GET', 'POST'])
-    @bp.route('/images/<string:filename>', methods=['GET', 'DELETE'])
+    @bp.route('/images/<path:filename>', methods=['GET', 'DELETE'])
     def images(filename=None):
         if request.method != 'GET' or filename is None:
             if err := _require_auth():
@@ -146,7 +146,7 @@ def create_blueprint():
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
     @bp.route('/configs', defaults={'filename': None}, methods=['GET', 'POST'])
-    @bp.route('/configs/<string:filename>', methods=['GET', 'DELETE'])
+    @bp.route('/configs/<path:filename>', methods=['GET', 'DELETE'])
     def config_files(filename=None):
         if request.method != 'GET' or filename is None:
             if err := _require_auth():
@@ -163,7 +163,7 @@ def create_blueprint():
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
     @bp.route('/scripts', defaults={'filename': None}, methods=['GET', 'POST'])
-    @bp.route('/scripts/<string:filename>', methods=['GET', 'DELETE'])
+    @bp.route('/scripts/<path:filename>', methods=['GET', 'DELETE'])
     def scripts(filename=None):
         if request.method != 'GET' or filename is None:
             if err := _require_auth():

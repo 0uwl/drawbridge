@@ -31,11 +31,59 @@ def create_blueprint():
         if not user or not user.password_hash or not check_password_hash(user.password_hash, password):
             return error_response('Invalid credentials', 'unauthorized', code=401, silent=True)
 
+        if user.must_reset_password:
+            # Credentials are valid, but no session is established yet — the
+            # caller must complete POST /auth/reset-password first. See
+            # docs/authentication.md ("Bootstrap admin password sources").
+            return success_response('Password reset required', payload={
+                'must_reset_password': True,
+                'username': user.username,
+            })
+
         user.last_login_at = utcnow_iso()
         session.commit()
 
         login_user(user)
         return success_response('Logged in', payload=_user_payload(user))
+
+    @bp.post('/reset-password')
+    def reset_password():
+        """Completes a forced password reset for an account whose
+        must_reset_password flag is set (currently only the bootstrap admin,
+        when its initial password came from ADMIN_PASSWORD — see
+        docs/authentication.md). Distinct from /change-password: this route
+        is unauthenticated by necessity (login() withholds a session while
+        the flag is set) and only succeeds when the flag is actually set,
+        so it can't be used as a back door around the normal, session-based
+        change-password flow for accounts that don't need a reset."""
+        data = request.get_json(silent=True) or {}
+        username = data.get('username', '').strip()
+        current_password = data.get('current_password', '')
+        new_password = data.get('new_password', '')
+
+        if not username or not current_password or not new_password:
+            return error_response(
+                'Username, current password, and new password are required', 'invalid_request', code=400,
+            )
+
+        session = get_session()
+        user = get_user_by_username(session, username)
+
+        if (
+            not user
+            or not user.must_reset_password
+            or not user.password_hash
+            or not check_password_hash(user.password_hash, current_password)
+        ):
+            return error_response('Invalid reset request', 'invalid_reset', code=400, silent=True)
+
+        user.password_hash = generate_password_hash(new_password)
+        user.must_reset_password = False
+        user.last_login_at = utcnow_iso()
+        session.commit()
+
+        login_user(user)
+        return success_response('Password reset', payload=_user_payload(user))
 
     @bp.post('/claim')
     def claim():

@@ -104,6 +104,106 @@ def test_init_db_does_not_rebootstrap_an_existing_database(tmp_path, capsys):
         assert session.query(User).filter_by(username='admin').count() == 1
 
 
+# Bootstrap admin password sources — see docs/authentication.md
+
+def test_admin_bootstrap_defaults_to_random_password_and_forces_reset(app):
+    # High entropy protects against guessing, not against the stdout print
+    # ending up retained in journald/log-aggregation — see docs/decisions.md.
+    with app.app_context():
+        admin = get_session().query(User).filter_by(username='admin').first()
+        assert admin.must_reset_password is True
+
+
+def test_admin_bootstrap_from_admin_password_env_forces_reset(tmp_path):
+    app = create_app({
+        'TESTING': True,
+        'DATABASE_PATH': str(tmp_path / 'drawbridge.db'),
+        'FILES_PATH': str(tmp_path / 'files'),
+        'ADMIN_PASSWORD': 'env-seeded-password',
+    })
+    with app.app_context():
+        admin = get_session().query(User).filter_by(username='admin').first()
+        assert admin.must_reset_password is True
+        assert admin.password_hash is not None
+
+
+def test_admin_bootstrap_from_admin_password_env_does_not_print_password(tmp_path, capsys):
+    create_app({
+        'TESTING': True,
+        'DATABASE_PATH': str(tmp_path / 'drawbridge.db'),
+        'FILES_PATH': str(tmp_path / 'files'),
+        'ADMIN_PASSWORD': 'env-seeded-password',
+    })
+    out = capsys.readouterr().out
+    assert 'env-seeded-password' not in out
+    assert 'password reset will be required' in out
+
+
+def test_admin_bootstrap_from_systemd_credential_does_not_force_reset(tmp_path):
+    creds_dir = tmp_path / 'creds'
+    creds_dir.mkdir()
+    (creds_dir / 'admin_password').write_text('credential-seeded-password\n')
+
+    app = create_app({
+        'TESTING': True,
+        'DATABASE_PATH': str(tmp_path / 'drawbridge.db'),
+        'FILES_PATH': str(tmp_path / 'files'),
+        'CREDENTIALS_DIRECTORY': str(creds_dir),
+    })
+    with app.app_context():
+        admin = get_session().query(User).filter_by(username='admin').first()
+        assert admin.must_reset_password is False
+
+    client = app.test_client()
+    response = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'credential-seeded-password'})
+    assert response.status_code == 200
+    assert response.get_json()['payload']['username'] == 'admin'
+
+
+def test_admin_bootstrap_prefers_systemd_credential_over_admin_password_env(tmp_path):
+    creds_dir = tmp_path / 'creds'
+    creds_dir.mkdir()
+    (creds_dir / 'admin_password').write_text('credential-wins')
+
+    app = create_app({
+        'TESTING': True,
+        'DATABASE_PATH': str(tmp_path / 'drawbridge.db'),
+        'FILES_PATH': str(tmp_path / 'files'),
+        'CREDENTIALS_DIRECTORY': str(creds_dir),
+        'ADMIN_PASSWORD': 'env-should-be-ignored',
+    })
+    with app.app_context():
+        admin = get_session().query(User).filter_by(username='admin').first()
+        assert admin.must_reset_password is False
+
+    client = app.test_client()
+    response = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'credential-wins'})
+    assert response.status_code == 200
+
+
+def test_admin_bootstrap_ignores_empty_systemd_credential_file(tmp_path):
+    creds_dir = tmp_path / 'creds'
+    creds_dir.mkdir()
+    (creds_dir / 'admin_password').write_text('')
+
+    app = create_app({
+        'TESTING': True,
+        'DATABASE_PATH': str(tmp_path / 'drawbridge.db'),
+        'FILES_PATH': str(tmp_path / 'files'),
+        'CREDENTIALS_DIRECTORY': str(creds_dir),
+        'ADMIN_PASSWORD': 'env-fallback-password',
+    })
+    with app.app_context():
+        admin = get_session().query(User).filter_by(username='admin').first()
+        # Empty credential file falls through to the next priority (ADMIN_PASSWORD)
+        assert admin.must_reset_password is True
+
+    client = app.test_client()
+    response = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'env-fallback-password'})
+    assert response.status_code == 200
+    assert response.get_json()['payload']['must_reset_password'] is True
+
+
 def test_sqlite_pragmas_are_set_on_connect(app):
     with app.app_context():
         session = get_session()

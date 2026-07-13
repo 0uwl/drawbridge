@@ -18,6 +18,8 @@ LOG_RETENTION_DAYS = '30'
 DEFAULT_IMAGE = None
 DEFAULT_CONFIG_FILE = None
 DEFAULT_SCRIPT = None
+ADMIN_PASSWORD = None
+CREDENTIALS_DIRECTORY = None
 
 # Built Vue SPA (frontend/, baked in at image build time — see
 # docs/frontend.md). static_folder is disabled below so Flask doesn't
@@ -42,6 +44,8 @@ def create_app(config_dict: dict = {}):
     app.config['DEFAULT_IMAGE'] = os.getenv('DEFAULT_IMAGE', DEFAULT_IMAGE)
     app.config['DEFAULT_CONFIG_FILE'] = os.getenv('DEFAULT_CONFIG_FILE', DEFAULT_CONFIG_FILE)
     app.config['DEFAULT_SCRIPT'] = os.getenv('DEFAULT_SCRIPT', DEFAULT_SCRIPT)
+    app.config['ADMIN_PASSWORD'] = os.getenv('ADMIN_PASSWORD', ADMIN_PASSWORD)
+    app.config['CREDENTIALS_DIRECTORY'] = os.getenv('CREDENTIALS_DIRECTORY', CREDENTIALS_DIRECTORY)
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')  # no default — see check below
 
     if config_dict:

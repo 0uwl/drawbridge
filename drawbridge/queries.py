@@ -239,6 +239,13 @@ def delete_file(session: Session, file_type: str, filename: str) -> bool:
     return True
 
 
+def list_provisioning_log(session: Session) -> list[ProvisioningLog]:
+    """Rows already reflect the retention window — add_log_entry purges
+    expired rows lazily on insert (see docs/database.md), so this just
+    reads what's currently present, most recent first."""
+    return list(session.scalars(select(ProvisioningLog).order_by(ProvisioningLog.timestamp.desc())).all())
+
+
 def purge_expired_logs(session: Session, retention_days: str) -> None:
     """Deletes ProvisioningLog rows older than retention_days. A no-op when
     retention is the literal string 'indefinite' (see docs/database.md,

@@ -98,6 +98,7 @@ class User(Base, UserMixin):
     saml_issuer: Mapped[str | None]     # IdP entity ID, set once SAML lands
     saml_subject: Mapped[str | None]    # IdP NameID, set once SAML lands
     is_active: Mapped[bool] = mapped_column(default=True)
+    must_reset_password: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[str]
     last_login_at: Mapped[str | None]
 ```
@@ -105,6 +106,12 @@ class User(Base, UserMixin):
 `auth_source`, `saml_issuer`, and `saml_subject` exist now, ahead of the SAML
 work, so that adding SAML later (see [authentication.md](authentication.md))
 is additive — no migration to widen the `users` table when it happens.
+
+`must_reset_password` is set on the bootstrap admin only when its initial
+password came from `ADMIN_PASSWORD` (a plaintext env var) rather than a
+systemd credential or the default random-generated password — see
+[authentication.md](authentication.md) ("Bootstrap admin password sources")
+for why those three sources aren't treated the same.
 
 A request-scoped session is opened per Flask request (e.g. via
 `app.teardown_appcontext`) and closed/rolled back at the end of the request.

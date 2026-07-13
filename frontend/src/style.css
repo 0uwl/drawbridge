@@ -1,8 +1,2 @@
-:root {
-  font: 16px/1.45 system-ui, 'Segoe UI', Roboto, sans-serif;
-  color-scheme: light dark;
-}
-
-body {
-  margin: 0;
-}
+@import "tailwindcss";
+@plugin "daisyui";

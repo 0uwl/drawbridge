@@ -19,6 +19,7 @@ Key test cases to cover:
   the `devices` row) and writes a `ProvisioningLog` row with image/config_file set
 - `ProvisioningLog` rows older than the retention setting are purged on next insert; rows are kept when retention is `indefinite`
 - `PUT /api/settings/log-retention` as admin updates the setting; as non-admin → 403
+- `GET /api/log` returns `ProvisioningLog` rows for any authenticated role (operator or admin); 401 when logged out
 - `POST /api/auth/login` with correct/incorrect credentials → 200 / 401
 - Accessing `/api/devices`, `/api/log`, or `/api/users` without a session → 401
 - `POST /api/users` as a non-admin operator → 403
@@ -30,12 +31,6 @@ starts a throwaway Postgres container automatically (via a session-scoped
 fixture in that directory's `conftest.py`) and tears it down after, so no
 manual setup is needed. It skips cleanly if `podman` isn't installed,
 rather than failing the run — see that directory's README.
-
-**Coverage note:** the `GET /api/log` item above has no route implementing
-it anywhere in `drawbridge/api/*.py` — `ProvisioningLog` rows are written
-(and purge-tested, see `tests/test_queries.py`) but never exposed over
-HTTP. Flagged as a follow-up for whoever builds the step-8 frontend's Log
-view, not silently dropped from the checklist.
 
 `kea/*.conf` has static contract tests (`tests/test_kea_config.py`) that
 run in the default suite — see `tests/kea-integration/README.md` for the

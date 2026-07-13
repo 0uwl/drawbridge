@@ -11,7 +11,10 @@ import pytest
 
 KEA_DIR = Path(__file__).parent.parent / 'kea'
 SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
-APP_PORT = 8080  # Containerfile / dev.sh both run the app on 8080
+APP_PORT = 8080  # DRAWBRIDGE_PORT's default (see docs/deployment.md) — this
+# config's Option 67 URL is static and isn't read from that env var, so this
+# constant would need updating by hand alongside kea-dhcp4.conf if the
+# project's default port ever changed
 
 
 def _load_jsonc(path: Path) -> dict:

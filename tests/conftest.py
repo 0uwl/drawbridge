@@ -89,6 +89,25 @@ def unclaimed_user(app):
 
 
 @pytest.fixture()
+def must_reset_user(app):
+    """A local account whose password was seeded via ADMIN_PASSWORD (or
+    equivalent) and hasn't completed its forced reset yet — see
+    docs/authentication.md."""
+    with app.app_context():
+        session = get_session()
+        u = User(
+            username='must-reset-operator',
+            role='operator',
+            auth_source='local',
+            password_hash=generate_password_hash(PASSWORD),
+            must_reset_password=True,
+        )
+        session.add(u)
+        session.commit()
+    return u
+
+
+@pytest.fixture()
 def saml_user(app):
     with app.app_context():
         session = get_session()

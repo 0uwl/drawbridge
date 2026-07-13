@@ -49,8 +49,9 @@ Provisioning VLAN
 │  │  user: drawbridge                           │    │
 │  │  image: localhost/drawbridge:latest         │    │
 │  │                                             │    │
-│  │  Flask app, port 8080 — devices phone home  │    │
-│  │  here directly (/api/provision-request)     │    │
+│  │  Flask app, port 8080 (DRAWBRIDGE_PORT) —    │    │
+│  │  devices phone home here directly           │    │
+│  │  (/api/provision-request)                   │    │
 │  │                                             │    │
 │  │  /app/data/drawbridge.db (SQLite)           │    │
 │  │  /app/scripts/      (ZTP Python scripts)    │    │

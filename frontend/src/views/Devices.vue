@@ -1,0 +1,137 @@
+<script setup>
+import { onMounted, reactive, ref } from 'vue'
+import { useDevicesStore } from '../stores/devices'
+
+const devices = useDevicesStore()
+onMounted(() => devices.list())
+
+const showAddModal = ref(false)
+const pendingRemove = ref(null)
+
+const form = reactive({
+  serial: '',
+  mac: '',
+  description: '',
+  image: '',
+  config_file: '',
+  script: '',
+})
+
+function resetForm() {
+  form.serial = ''
+  form.mac = ''
+  form.description = ''
+  form.image = ''
+  form.config_file = ''
+  form.script = ''
+}
+
+async function submitAdd() {
+  const ok = await devices.add({ ...form })
+  if (ok) {
+    resetForm()
+    showAddModal.value = false
+  }
+}
+
+async function confirmRemove() {
+  const serial = pendingRemove.value
+  pendingRemove.value = null
+  await devices.remove(serial)
+}
+</script>
+
+<template>
+  <div class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h1 class="text-2xl font-bold">Devices</h1>
+      <button class="btn btn-primary btn-sm" @click="showAddModal = true">Add device</button>
+    </div>
+
+    <div v-if="devices.error" class="alert alert-error mb-4">{{ devices.error }}</div>
+
+    <div class="overflow-x-auto">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Serial</th>
+            <th>MAC</th>
+            <th>Description</th>
+            <th>Image</th>
+            <th>Config</th>
+            <th>Added</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="d in devices.items" :key="d.serial">
+            <td class="font-mono">{{ d.serial }}</td>
+            <td>{{ d.mac ?? '—' }}</td>
+            <td>{{ d.description ?? '—' }}</td>
+            <td>{{ d.image ?? '—' }}</td>
+            <td>{{ d.config_file ?? '—' }}</td>
+            <td>{{ d.added_at }}</td>
+            <td>
+              <button class="btn btn-error btn-xs" @click="pendingRemove = d.serial">Remove</button>
+            </td>
+          </tr>
+          <tr v-if="devices.items.length === 0">
+            <td colspan="7" class="text-center text-base-content/60">No devices registered</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Add device modal -->
+    <dialog class="modal" :open="showAddModal">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg mb-4">Add device</h3>
+        <form @submit.prevent="submitAdd" class="flex flex-col gap-3">
+          <label class="form-control">
+            <span class="label-text">Serial *</span>
+            <input v-model="form.serial" type="text" class="input input-bordered" required />
+          </label>
+          <label class="form-control">
+            <span class="label-text">MAC</span>
+            <input v-model="form.mac" type="text" class="input input-bordered" />
+          </label>
+          <label class="form-control">
+            <span class="label-text">Description</span>
+            <input v-model="form.description" type="text" class="input input-bordered" />
+          </label>
+          <label class="form-control">
+            <span class="label-text">Image</span>
+            <input v-model="form.image" type="text" class="input input-bordered" />
+          </label>
+          <label class="form-control">
+            <span class="label-text">Config file</span>
+            <input v-model="form.config_file" type="text" class="input input-bordered" />
+          </label>
+          <label class="form-control">
+            <span class="label-text">Script</span>
+            <input v-model="form.script" type="text" class="input input-bordered" />
+          </label>
+
+          <div class="modal-action">
+            <button type="button" class="btn" @click="showAddModal = false">Cancel</button>
+            <button type="submit" class="btn btn-primary" :disabled="devices.loading">Add</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+
+    <!-- Remove confirmation modal -->
+    <dialog class="modal" :open="pendingRemove !== null">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">Remove device?</h3>
+        <p class="py-4">
+          This removes <span class="font-mono">{{ pendingRemove }}</span> from the allowlist. This cannot be undone.
+        </p>
+        <div class="modal-action">
+          <button class="btn" @click="pendingRemove = null">Cancel</button>
+          <button class="btn btn-error" @click="confirmRemove">Remove</button>
+        </div>
+      </div>
+    </dialog>
+  </div>
+</template>
