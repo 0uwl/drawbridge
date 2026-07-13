@@ -47,6 +47,23 @@ pytest
 See [docs/deployment.md](docs/deployment.md) for running the app locally,
 building the container, and the full list of environment variables.
 
+## Installation
+
+On an Ubuntu provisioning host, [install.sh](install.sh) installs `podman`
+and Kea if either is missing, installs Drawbridge's `kea/*.conf` into
+`/etc/kea`, and pulls `ghcr.io/0uwl/drawbridge:latest`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v0.1.0-alpha/install.sh | sudo bash
+```
+
+Review [install.sh](install.sh) before running it — it makes system changes
+(installs packages, writes `/etc/kea`) as root. It does not start the
+Drawbridge container itself; see [docs/deployment.md](docs/deployment.md)
+for the Quadlet unit and `/srv/drawbridge` host directories needed for that.
+
+Equivalent from a repo checkout: `./install.sh`.
+
 ## Development
 
 Don't `pip install` the `drawbridge` package itself — there's no

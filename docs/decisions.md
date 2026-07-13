@@ -198,6 +198,22 @@
   point — `login()` validates credentials but deliberately withholds a
   session while the flag is set.
 
+- **`install.sh`'s curl-pipe fetch is pinned to a branch ref, not a release
+  tag — revisit once real releases start.** When `install.sh` is run via
+  `curl | sudo bash` there's no sibling `kea/` directory to read from, so it
+  fetches `kea/kea-dhcp4.conf`/`kea/kea-ctrl-agent.conf` from
+  `raw.githubusercontent.com` at a hardcoded ref (`RAW_BASE`). That same ref
+  is duplicated in `README.md`'s curl one-liner, and a CI check
+  (`.github/workflows/ci.yml`) fails the build if the
+  two diverge — but the check only catches the two copies disagreeing with
+  each other, not the underlying problem: a branch name is a moving target,
+  so the URL anyone copies today silently serves whatever lands on that
+  branch tomorrow, not a fixed point in time. There's no release process yet
+  (see [alpha.md](../alpha.md)), so this is accepted for now. Once real
+  releases start post-alpha, repoint both at a release tag instead — e.g.
+  resolve `latest` via the GitHub Releases API — so the one-liner installs a
+  fixed, reproducible version rather than tip-of-branch.
+
 - **`DRAWBRIDGE_PORT` controls where the app listens, but two other
   hardcoded `8080`s aren't wired to it.** `drawbridge/gunicorn.conf.py`'s
   bind, `dev.sh`'s `flask run --port`, and `frontend/vite.config.js`'s
