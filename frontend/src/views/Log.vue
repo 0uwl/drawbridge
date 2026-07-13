@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted } from 'vue'
 import { useLogStore } from '../stores/log'
+import { formatTimestamp } from '../utils/format'
 
 const log = useLogStore()
 onMounted(() => log.fetchLog())
@@ -27,7 +28,7 @@ onMounted(() => log.fetchLog())
         </thead>
         <tbody>
           <tr v-for="e in log.entries" :key="e.id">
-            <td>{{ e.timestamp }}</td>
+            <td :title="e.timestamp">{{ formatTimestamp(e.timestamp) }}</td>
             <td class="font-mono">{{ e.serial }}</td>
             <td>
               <span class="badge" :class="e.event === 'provision_complete' ? 'badge-success' : 'badge-error'">

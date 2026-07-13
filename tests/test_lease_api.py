@@ -4,7 +4,7 @@ import pytest
 
 from drawbridge import create_app
 from drawbridge.db import get_session
-from drawbridge.models import Device, ProvisioningSession
+from drawbridge.models import Device, ProvisioningLog, ProvisioningSession
 
 BASE = '/api/v1'
 
@@ -13,7 +13,10 @@ BASE = '/api/v1'
 def device(app):
     with app.app_context():
         session = get_session()
-        d = Device(serial='FJC2517X0AB', mac='aa:bb:cc:dd:ee:ff', added_by='operator')
+        d = Device(
+            serial='FJC2517X0AB', mac='aa:bb:cc:dd:ee:ff', added_by='operator',
+            image='cat9k_iosxe.SPA.bin', config_file='base.cfg',
+        )
         session.add(d)
         session.commit()
     return d
@@ -23,7 +26,10 @@ def device(app):
 def active_session(app, device):
     with app.app_context():
         session = get_session()
-        ps = ProvisioningSession(serial=device.serial, mac=device.mac, ip='192.168.100.15', state='lease_approved')
+        ps = ProvisioningSession(
+            serial=device.serial, mac=device.mac, ip='192.168.100.15', state='lease_approved',
+            image=device.image, config_file=device.config_file,
+        )
         session.add(ps)
         session.commit()
     return ps
@@ -38,7 +44,14 @@ def test_provision_request_known_serial_returns_200_and_creates_session(client, 
     assert response.get_json()['success'] is True
 
     with app.app_context():
-        assert get_session().get(ProvisioningSession, device.serial) is not None
+        ps = get_session().get(ProvisioningSession, device.serial)
+        assert ps is not None
+        # ip is captured from the caller, image/config_file from the device's
+        # assignment — both are needed for the Active Sessions UI to show
+        # anything other than "—" (see docs/frontend.md).
+        assert ps.ip is not None
+        assert ps.image == device.image
+        assert ps.config_file == device.config_file
 
 
 def test_provision_request_unknown_serial_returns_404(client, app):
@@ -79,6 +92,36 @@ def test_provision_complete_known_active_session_returns_200(client, app, active
     with app.app_context():
         session = get_session()
         assert session.get(ProvisioningSession, active_session.serial) is None
+
+
+def test_provision_complete_falls_back_to_session_image_and_config_when_not_reported(client, app, active_session):
+    # scripts/ztp-base.py's alpha stub never reports image/config_file in
+    # its completion payload — without the session fallback, the log (and
+    # therefore the Devices UI's "Provisioning" badge) would show blank
+    # image/config for every real-world completion despite the assignment
+    # being known since provision-request.
+    response = client.put(f'{BASE}/provision-complete', json={'serial': active_session.serial})
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        entry = get_session().query(ProvisioningLog).filter_by(serial=active_session.serial).one()
+        assert entry.image == active_session.image
+        assert entry.config_file == active_session.config_file
+
+
+def test_provision_complete_explicit_image_and_config_override_session_fallback(client, app, active_session):
+    response = client.put(
+        f'{BASE}/provision-complete',
+        json={'serial': active_session.serial, 'image': 'reported.bin', 'config_file': 'reported.cfg'},
+    )
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        entry = get_session().query(ProvisioningLog).filter_by(serial=active_session.serial).one()
+        assert entry.image == 'reported.bin'
+        assert entry.config_file == 'reported.cfg'
 
 
 def test_provision_complete_unknown_serial_returns_404(client):

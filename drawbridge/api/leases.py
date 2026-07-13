@@ -27,7 +27,14 @@ def create_blueprint():
         if device is None:
             return error_response(f'{serial} not found', 'device_not_found', code=404)
 
-        create_provisioning_session(session, serial=serial, mac=mac)
+        create_provisioning_session(
+            session,
+            serial=serial,
+            mac=mac,
+            ip=request.remote_addr,
+            image=device.image,
+            config_file=device.config_file,
+        )
         session.commit()
 
         return success_response(f'{serial} approved', payload=device.as_dict())
@@ -44,8 +51,6 @@ def create_blueprint():
             return error_response('Request body is missing required parameter serial', 'missing_parameter', code=422)
 
         event = data.get('event', 'provision_complete')
-        image = data.get('image')
-        config_file = data.get('config_file')
         detail = data.get('detail')
 
         session = get_session()
@@ -53,6 +58,20 @@ def create_blueprint():
 
         if active is None:
             return error_response(f'{serial} is not in active provisioning', 'device_not_active', code=404)
+
+        # Falls back to the session's assigned image/config_file (set at
+        # approval time from the Device row — see provision_request above)
+        # when the device doesn't explicitly report its own. The alpha
+        # scripts/ztp-base.py stub never does, so without this the log
+        # would show blank image/config for every real completion despite
+        # the assignment being known.
+        image = data.get('image')
+        if image is None:
+            image = active.image
+
+        config_file = data.get('config_file')
+        if config_file is None:
+            config_file = active.config_file
 
         add_log_entry(
             session,

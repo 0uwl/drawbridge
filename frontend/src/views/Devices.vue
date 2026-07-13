@@ -1,12 +1,25 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useDevicesStore } from '../stores/devices'
+import { useLogStore } from '../stores/log'
+import DeviceTabs from '../components/DeviceTabs.vue'
+import { formatTimestamp } from '../utils/format'
 
 const devices = useDevicesStore()
-onMounted(() => devices.list())
+const log = useLogStore()
+onMounted(() => {
+  devices.list()
+  log.fetchLog()
+})
 
 const showAddModal = ref(false)
 const pendingRemove = ref(null)
+
+function lastProvisioned(serial) {
+  return log.entries
+    .filter((e) => e.serial === serial && e.event === 'provision_complete')
+    .reduce((latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest), null)
+}
 
 const form = reactive({
   serial: '',
@@ -48,7 +61,10 @@ async function confirmRemove() {
       <button class="btn btn-primary btn-sm" @click="showAddModal = true">Add device</button>
     </div>
 
+    <DeviceTabs />
+
     <div v-if="devices.error" class="alert alert-error mb-4">{{ devices.error }}</div>
+    <div v-if="log.error" class="alert alert-error mb-4">{{ log.error }}</div>
 
     <div class="overflow-x-auto">
       <table class="table">
@@ -60,6 +76,7 @@ async function confirmRemove() {
             <th>Image</th>
             <th>Config</th>
             <th>Added</th>
+            <th>Provisioning</th>
             <th></th>
           </tr>
         </thead>
@@ -70,13 +87,19 @@ async function confirmRemove() {
             <td>{{ d.description ?? '—' }}</td>
             <td>{{ d.image ?? '—' }}</td>
             <td>{{ d.config_file ?? '—' }}</td>
-            <td>{{ d.added_at }}</td>
+            <td :title="d.added_at">{{ formatTimestamp(d.added_at) }}</td>
+            <td>
+              <span v-if="lastProvisioned(d.serial)" class="badge badge-success" :title="lastProvisioned(d.serial).timestamp">
+                Provisioned {{ formatTimestamp(lastProvisioned(d.serial).timestamp) }}
+              </span>
+              <span v-else class="badge badge-ghost">Not yet provisioned</span>
+            </td>
             <td>
               <button class="btn btn-error btn-xs" @click="pendingRemove = d.serial">Remove</button>
             </td>
           </tr>
           <tr v-if="devices.items.length === 0">
-            <td colspan="7" class="text-center text-base-content/60">No devices registered</td>
+            <td colspan="8" class="text-center text-base-content/60">No devices registered</td>
           </tr>
         </tbody>
       </table>

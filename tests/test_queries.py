@@ -143,13 +143,17 @@ def test_delete_device(session):
 
 def test_create_provisioning_session(session):
     queries.add_device(session, serial='SN1')
-    ps = queries.create_provisioning_session(session, serial='SN1', mac='aa:bb', ip='10.0.0.5')
+    ps = queries.create_provisioning_session(
+        session, serial='SN1', mac='aa:bb', ip='10.0.0.5', image='img.bin', config_file='base.cfg',
+    )
     session.commit()
 
     assert queries.get_provisioning_session(session, 'SN1') is ps
     assert ps.state == 'lease_approved'
     assert ps.mac == 'aa:bb'
     assert ps.ip == '10.0.0.5'
+    assert ps.image == 'img.bin'
+    assert ps.config_file == 'base.cfg'
 
 
 def test_create_provisioning_session_is_idempotent(session):

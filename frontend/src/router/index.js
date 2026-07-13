@@ -4,8 +4,14 @@ import { useAuthStore } from '../stores/auth'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/devices' },
+    { path: '/', redirect: '/sessions' },
     { path: '/login', name: 'login', component: () => import('../views/Login.vue') },
+    {
+      path: '/sessions',
+      name: 'sessions',
+      component: () => import('../views/Sessions.vue'),
+      meta: { requiresAuth: true },
+    },
     {
       path: '/devices',
       name: 'devices',
@@ -24,7 +30,7 @@ const router = createRouter({
       component: () => import('../views/Settings.vue'),
       meta: { requiresAuth: true },
     },
-    { path: '/:pathMatch(.*)*', redirect: '/devices' },
+    { path: '/:pathMatch(.*)*', redirect: '/sessions' },
   ],
 })
 
@@ -47,7 +53,7 @@ router.beforeEach(async (to) => {
   }
 
   if (to.path === '/login' && auth.currentUser) {
-    return '/devices'
+    return '/sessions'
   }
 
   return true

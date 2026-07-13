@@ -54,8 +54,8 @@ class ProvisioningSession(Base):
     serial: Mapped[str] = mapped_column(primary_key=True)
     mac: Mapped[str | None]
     ip: Mapped[str | None]
-    image: Mapped[str | None]        # set when device reports at provision-complete
-    config_file: Mapped[str | None]  # set when device reports at provision-complete
+    image: Mapped[str | None]        # copied from the Device row's assignment at approval time
+    config_file: Mapped[str | None]  # copied from the Device row's assignment at approval time
     state: Mapped[str]               # 'lease_approved', 'script_fetched', 'downloading',
                                      # 'updating_software', 'rebooting', 'configuring'
     approved_at: Mapped[str] = mapped_column(default=utcnow_iso)

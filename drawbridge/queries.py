@@ -96,16 +96,25 @@ def create_provisioning_session(
     serial: str,
     mac: str | None = None,
     ip: str | None = None,
+    image: str | None = None,
+    config_file: str | None = None,
 ) -> ProvisioningSession:
     """Idempotent on serial: a device may hit /api/provision-request more
-    than once per boot cycle. Re-approving updates mac/ip rather than
-    raising on the primary-key collision."""
+    than once per boot cycle. Re-approving updates mac/ip/image/config_file
+    rather than raising on the primary-key collision. image/config_file are
+    the device's assigned values (from its Device row) at approval time, not
+    a report of what it actually applied — see ProvisioningSession's
+    docstring."""
     ps = session.get(ProvisioningSession, serial)
     if ps is not None:
         ps.mac = mac
         ps.ip = ip
+        ps.image = image
+        ps.config_file = config_file
         return ps
-    ps = ProvisioningSession(serial=serial, mac=mac, ip=ip, state='lease_approved')
+    ps = ProvisioningSession(
+        serial=serial, mac=mac, ip=ip, image=image, config_file=config_file, state='lease_approved',
+    )
     session.add(ps)
     return ps
 

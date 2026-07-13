@@ -22,10 +22,14 @@ frontend/
     ├── style.css        ← Tailwind/DaisyUI entry point (see Styling below)
     ├── api/
     │   └── client.js    ← single configured axios instance
-    ├── stores/          ← one Pinia store per domain (auth, devices, log, users, settings)
+    ├── stores/          ← one Pinia store per domain (auth, devices, sessions, log, users, settings)
+    ├── components/
+    │   └── DeviceTabs.vue ← shared tab bar (Active Sessions / Allowlist) used by both device views
+    ├── utils/
+    │   └── format.js    ← formatTimestamp() — abbreviates ISO timestamps to the browser's local date/time-to-minute
     ├── router/
     │   └── index.js     ← routes + the auth navigation guard
-    └── views/           ← Login, Devices, Log, Settings
+    └── views/           ← Login, Sessions, Devices, Log, Settings
 ```
 
 `frontend/node_modules/` and `frontend/dist/` are gitignored and
