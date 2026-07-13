@@ -6,15 +6,19 @@
 
 **Key endpoints:**
 
+All `/api/*` paths below are versioned — `API_PREFIX` in `main.py` is
+`/api/v1`, so e.g. `/api/devices` in this table is actually
+`/api/v1/devices`. `/files/*` paths are not versioned.
+
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/provision-request` | Called by the ZTP script's phone-home step on boot; approves or denies provisioning |
-| GET | `/api/devices` | List devices currently pending provisioning |
-| POST | `/api/devices` | Register a new device (serial + optional metadata) |
-| DELETE | `/api/devices/<serial>` | Remove a device from the allowlist |
-| GET | `/api/devices/<serial>` | Get a pending device's status (not history — see `/api/log`) |
-| GET | `/api/devices/sessions` | List all active provisioning sessions |
-| GET | `/api/devices/sessions/<serial>` | Get the active provisioning session for a device |
+| GET | `/api/v1/provision-request` | Called by the ZTP script's phone-home step on boot; approves or denies provisioning |
+| GET | `/api/v1/devices` | List devices currently pending provisioning |
+| POST | `/api/v1/devices` | Register a new device (serial + optional metadata) |
+| DELETE | `/api/v1/devices/<serial>` | Remove a device from the allowlist |
+| GET | `/api/v1/devices/<serial>` | Get a pending device's status (not history — see `/api/v1/log`) |
+| GET | `/api/v1/devices/sessions` | List all active provisioning sessions |
+| GET | `/api/v1/devices/sessions/<serial>` | Get the active provisioning session for a device |
 | GET | `/files/images` | List uploaded OS images (auth required) |
 | POST | `/files/images` | Upload an OS image (auth required) |
 | GET | `/files/images/<filename>` | Download an OS image — unauthenticated, served to devices during ZTP |
@@ -25,22 +29,22 @@
 | DELETE | `/files/configs/<filename>` | Delete a config file (auth required) |
 | GET | `/files/scripts` | List uploaded ZTP scripts (auth required) |
 | POST | `/files/scripts` | Upload a ZTP script (auth required) |
-| GET | `/files/scripts/<filename>` | Download a ZTP script — unauthenticated, served to devices during ZTP |
+| GET | `/files/scripts/<filename>` | Download a ZTP script — unauthenticated, served to devices during ZTP (Kea's Option 67 boot-file-name points here, see [kea.md](kea.md)) |
 | DELETE | `/files/scripts/<filename>` | Delete a ZTP script (auth required) |
-| PUT | `/api/provision-complete` | Device reports provisioning outcome; deletes the `ProvisioningSession` row, writes a `ProvisioningLog` row. The `devices` allowlist row is untouched. POST is also accepted for testing/debugging. |
-| GET | `/api/log` | List provisioning log entries (time, image, config file, outcome) within the retention window |
-| POST | `/api/auth/login` | Local username/password login, starts session |
-| POST | `/api/auth/logout` | Ends the current session |
-| GET | `/api/auth/me` | Current authenticated operator (id, username, role, auth_source) |
-| POST | `/api/auth/claim` | First-time password creation for an admin-created local account (`username` + `password`, unauthenticated) |
-| POST | `/api/auth/change-password` | Change the current user's own password (`current_password` + `new_password`, any role) |
-| POST | `/api/auth/reset-password` | Completes a forced password reset (`username` + `current_password` + `new_password`, unauthenticated). Only succeeds when `must_reset_password` is set — see [authentication.md](authentication.md) |
-| GET | `/api/users` | List operator accounts (admin only) |
-| POST | `/api/users` | Create an operator account with no password set yet (admin only) |
-| PUT | `/api/users/<id>` | Change an operator's role (admin only) |
-| DELETE | `/api/users/<id>` | Remove an operator account, no password confirmation required (admin only) |
-| GET | `/api/settings/log-retention` | Current log retention setting (days, or indefinite) |
-| PUT | `/api/settings/log-retention` | Update log retention setting (admin only) |
+| PUT | `/api/v1/provision-complete` | Device reports provisioning outcome; deletes the `ProvisioningSession` row, writes a `ProvisioningLog` row. The `devices` allowlist row is untouched. POST is also accepted for testing/debugging. |
+| GET | `/api/v1/log` | List provisioning log entries (time, image, config file, outcome) within the retention window |
+| POST | `/api/v1/auth/login` | Local username/password login, starts session |
+| POST | `/api/v1/auth/logout` | Ends the current session |
+| GET | `/api/v1/auth/me` | Current authenticated operator (id, username, role, auth_source) |
+| POST | `/api/v1/auth/claim` | First-time password creation for an admin-created local account (`username` + `password`, unauthenticated) |
+| POST | `/api/v1/auth/change-password` | Change the current user's own password (`current_password` + `new_password`, any role) |
+| POST | `/api/v1/auth/reset-password` | Completes a forced password reset (`username` + `current_password` + `new_password`, unauthenticated). Only succeeds when `must_reset_password` is set — see [authentication.md](authentication.md) |
+| GET | `/api/v1/users` | List operator accounts (admin only) |
+| POST | `/api/v1/users` | Create an operator account with no password set yet (admin only) |
+| PUT | `/api/v1/users/<id>` | Change an operator's role (admin only) |
+| DELETE | `/api/v1/users/<id>` | Remove an operator account, no password confirmation required (admin only) |
+| GET | `/api/v1/settings/log-retention` | Current log retention setting (days, or indefinite) |
+| PUT | `/api/v1/settings/log-retention` | Update log retention setting (admin only) |
 
 Every `/api/devices`, `/api/log`, `/api/users`, `/api/settings/*`, and
 `GET /files/*` list / `POST /files/*` upload / `DELETE /files/*` delete route
@@ -55,7 +59,7 @@ secret an anonymous, unregistered device could hold, so no auth decorator
 applies to either route; see [decisions.md](decisions.md) for the
 reasoning and the explicitly-accepted serial-enumeration non-goal.
 
-## `/api/provision-request` contract
+## `/api/v1/provision-request` contract
 
 Called by the ZTP script (`scripts/ztp-base.py`) as its first action after
 fetching the script — a plain `GET` with query-string params, not a JSON

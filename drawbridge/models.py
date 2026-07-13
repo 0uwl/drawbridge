@@ -45,9 +45,10 @@ class Device(Base):
 
 
 class ProvisioningSession(Base):
-    """Transient record of an in-progress ZTP run. Created when /api/lease-event
-    approves a serial; deleted when /api/provision-complete fires (success or
-    failure). The Device allowlist row is not touched."""
+    """Transient record of an in-progress ZTP run. Created when
+    /api/v1/provision-request approves a serial; deleted when
+    /api/v1/provision-complete fires (success or failure). The Device
+    allowlist row is not touched."""
     __tablename__ = 'provisioning_sessions'
 
     serial: Mapped[str] = mapped_column(primary_key=True)

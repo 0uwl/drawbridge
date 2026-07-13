@@ -61,7 +61,7 @@ def request_provisioning(serial):
     request body, only a URL and a destination file. Returns the parsed
     decision dict, or None if denied/unreachable.
     """
-    url = 'http://{0}:{1}/api/provision-request?serial={2}'.format(
+    url = 'http://{0}:{1}/api/v1/provision-request?serial={2}'.format(
         DRAWBRIDGE_HOST, DRAWBRIDGE_PORT, urllib.parse.quote(serial))
 
     try:
@@ -105,7 +105,7 @@ def report_status(payload):
     (via cli.execute) issue the HTTP request — see docs/decisions.md.
     Outside Guestshell (local testing), falls back to a direct HTTP request.
     """
-    url = 'http://{0}:{1}/api/provision-complete'.format(DRAWBRIDGE_HOST, DRAWBRIDGE_PORT)
+    url = 'http://{0}:{1}/api/v1/provision-complete'.format(DRAWBRIDGE_HOST, DRAWBRIDGE_PORT)
 
     try:
         import cli

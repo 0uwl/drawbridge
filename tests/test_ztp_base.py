@@ -46,3 +46,21 @@ def test_main_does_not_report_status_when_denied(ztp_base):
         ztp_base.main()
 
     report_status.assert_not_called()
+
+
+def test_request_provisioning_uses_versioned_api_path(ztp_base):
+    with patch('urllib.request.urlopen', _urlopen_returning({'success': True})) as urlopen:
+        ztp_base.request_provisioning('TEST-SERIAL-0001')
+
+    called_url = urlopen.call_args[0][0]
+    assert called_url.startswith('http://{0}:{1}/api/v1/provision-request'.format(
+        ztp_base.DRAWBRIDGE_HOST, ztp_base.DRAWBRIDGE_PORT))
+
+
+def test_report_status_uses_versioned_api_path(ztp_base):
+    with patch('urllib.request.urlopen') as urlopen:
+        ztp_base.report_status({'serial': 'TEST-SERIAL-0001'})
+
+    request_obj = urlopen.call_args[0][0]
+    assert request_obj.full_url == 'http://{0}:{1}/api/v1/provision-complete'.format(
+        ztp_base.DRAWBRIDGE_HOST, ztp_base.DRAWBRIDGE_PORT)

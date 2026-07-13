@@ -186,37 +186,53 @@ despite being documented — added to `settings.py` alongside its query in
   simulate a provision-request via curl, confirm it shows in the log, remove
   the device.
 
-### 9. GitHub CI/CD pipeline
-Not implemented yet — deferred until the frontend (step 8) exists, since
-there's nothing meaningful to build/publish before then. Planned shape only:
+### 9. GitHub CI/CD pipeline (DONE)
+`.github/workflows/ci.yml`, triggered on push/PR to `main`:
 
-- GitHub Actions workflow (e.g. `.github/workflows/ci.yml`), triggered on
-  push/PR to `main` at minimum.
-- Jobs, in order, later jobs gated on earlier ones passing:
-  1. **Test** — set up Python, install `requirements.txt`, run the full
-     `pytest` suite from step 7.
-  2. **Build frontend** — set up Node, `npm ci && npm run build` under
-     `frontend/`. May end up folded into the container build job instead of
-     standing alone, since the Containerfile ([docs/deployment.md](docs/deployment.md))
-     already builds the frontend as its own multi-stage stage — decide when
-     implementing.
-  3. **Publish container** — build the multi-stage Containerfile and push to
-     GitHub Container Registry (`ghcr.io/<org>/drawbridge`), authenticating
-     with the workflow's built-in `GITHUB_TOKEN` (no separate PAT needed for
-     same-repo/org GHCR pushes).
-- Tagging strategy (e.g. `latest` on `main`, semver on release tags) not yet
-  decided — revisit alongside the frontend work.
-- Sits as a gate before step 10: end-to-end verification should exercise the
-  same container artifact this pipeline publishes, not a one-off local build.
+1. **Test** — set up Python 3.12, install `requirements.txt`, run the full
+   `pytest` suite from step 7. Runs on both push and PR.
+2. **Publish container** — build the multi-stage `Containerfile` (frontend
+   build is its own stage in the Containerfile itself — see
+   [docs/deployment.md](docs/deployment.md) — so there's no separate
+   frontend-build job) and push to GitHub Container Registry
+   (`ghcr.io/0uwl/drawbridge:latest`), authenticating with the workflow's
+   built-in `GITHUB_TOKEN`. Gated on the test job passing, and only runs on
+   push to `main` (not PRs), so PR CI stays fast and no images are pushed
+   for untrusted/in-progress branches.
 
-### 10. End-to-end manual verification (no live Kea)
-- `pytest` green.
+Tagging strategy is `latest` on every `main` push only; semver-on-release-tag
+publishing was considered and deferred — not needed until there's an actual
+release process.
+
+Sits as a gate before step 10: end-to-end verification should exercise the
+same container artifact this pipeline publishes, not a one-off local build.
+
+### 10. End-to-end manual verification (no live Kea) (DONE)
+- `pytest` green (230 tests).
 - `flask run` + curl sequence simulating the full flow against
-  `/api/provision-request` and `/api/provision-complete` by hand, confirming
-  DB state transitions (`ProvisioningSession` created → deleted,
-  `ProvisioningLog` rows appended, `devices` row untouched) match
+  `/api/v1/provision-request` and `/api/v1/provision-complete` by hand,
+  confirmed DB state transitions (`ProvisioningSession` created → deleted,
+  `ProvisioningLog` row appended, `devices` row untouched) match
   [docs/architecture.md](docs/architecture.md)'s DHCP Flow.
-- UI smoke test per step 8.
+- UI smoke test per step 8: logged in as the bootstrapped admin, completed
+  the forced password reset, registered a device, simulated a
+  provision-request/provision-complete via curl, confirmed the entry in the
+  Log view, removed the device — all clean.
+
+This pass caught two real bugs neither `pytest` nor the doc review had:
+`scripts/ztp-base.py` and `kea/kea-dhcp4.conf`'s Option 67 `boot-file-name`
+were both hardcoded to pre-versioning/pre-`/files`-prefix URLs
+(`/api/provision-request`, `/scripts/ztp-base.py`) that no longer matched
+the routes actually registered in `main.py` (`/api/v1/...`,
+`/files/scripts/...`) — invisible to the test suite because
+`test_ztp_base.py` mocks `urlopen` entirely and `test_kea_config.py` only
+checked the boot-file basename, not its full path. Both fixed, with new
+regression tests (`test_request_provisioning_uses_versioned_api_path`,
+`test_report_status_uses_versioned_api_path`,
+`test_boot_file_name_path_matches_files_download_route`) and a couple of
+stale-doc references (`/api/lease-event`, the abandoned
+`leases4_committed` hook) cleaned up in `CLAUDE.md`/`models.py`/`docs/api.md`
+along the way.
 
 ## Resolved decisions
 

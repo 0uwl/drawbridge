@@ -52,6 +52,15 @@ def test_boot_file_name_basename_matches_ztp_script(cisco_class):
     assert (SCRIPTS_DIR / 'ztp-base.py').is_file()
 
 
+def test_boot_file_name_path_matches_files_download_route(cisco_class):
+    # files.py's blueprint is registered under url_prefix='/files' (see
+    # main.py) with a GET /scripts/<filename> route inside it — the full
+    # device-facing path is /files/scripts/<filename>, not /scripts/<filename>.
+    boot_file = next(o for o in cisco_class['option-data'] if o['name'] == 'boot-file-name')
+    url_path = urlparse(boot_file['data']).path
+    assert url_path == '/files/scripts/ztp-base.py'
+
+
 def test_boot_file_name_host_is_in_configured_subnet(dhcp4_conf, cisco_class):
     boot_file = next(o for o in cisco_class['option-data'] if o['name'] == 'boot-file-name')
     host = urlparse(boot_file['data']).hostname
