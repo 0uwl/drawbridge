@@ -1,5 +1,60 @@
 # Deployment
 
+## Network isolation — strongly recommended
+
+**Drawbridge's security guarantees only hold if the provisioning VLAN is
+physically/logically isolated and access to it is restricted by switch and
+firewall policy.** Drawbridge cannot enforce this itself and will run
+without it — but doing so knowingly weakens what it protects against, so
+read this before deploying, especially before exposing Drawbridge beyond a
+lab network.
+
+`/api/provision-request` (the device phone-home call) is deliberately
+unauthenticated: at the moment a device first contacts the network, it
+holds no credential Drawbridge could check — only its own serial number,
+which is printed on the chassis and not a secret. That means **anyone who
+can send or observe traffic on the provisioning VLAN can enumerate which
+serials are registered**, by watching the 200-vs-404 response the same way
+a legitimate device would. This is a structural property of Classic ZTP as
+implemented here, not a bug — see [decisions.md](decisions.md) ("No sZTP")
+for why. No token or secret handed to the device over that same first
+contact can fix it either: whatever value would be checked has to cross
+the wire during that same unauthenticated conversation, so it's exactly as
+observable/replayable to an eavesdropper as the serial itself. The only
+mechanism that actually closes this gap is a hardware-rooted device
+identity proven cryptographically before any network contact (Cisco SUDI /
+IEEE 802.1AR IDevID, via RFC 8572's Ownership Vouchers and MASA
+infrastructure) — which Drawbridge deliberately does not use, per
+[decisions.md](decisions.md).
+
+Drawbridge protects what it can at the application layer:
+- **Serial number allowlisting** — gates which devices get provisioned at all.
+- **HTTPS script delivery with server certificate validation.**
+- **SHA-256 hash verification** of served images and config payloads.
+
+These protect *what* gets provisioned and *to whom* it's addressed. None of
+them can protect against a device already on the provisioning VLAN passively
+watching or probing the exchange — that was never something application
+code running on the server could enforce.
+
+**Closing that gap is the deployment's job, not something Drawbridge can
+check or enforce at runtime:**
+- No routing between the provisioning VLAN and any untrusted network.
+- Port security / 802.1X on switch ports serving the VLAN, so arbitrary
+  devices can't simply plug in.
+- DHCP snooping and dynamic ARP inspection, so a rogue device can't spoof
+  the DHCP server or intercept another device's unicast traffic.
+- No hubs, unmanaged switches, or mirrored/monitor ports on the segment.
+
+**Consequence of skipping this:** Drawbridge will run fine on a flat or
+untrusted network — nothing fails or refuses to start — but the
+allowlist/HTTPS/hash protections above stop being the actual boundary
+between a trusted and untrusted device. Anyone who can reach the
+provisioning VLAN can enumerate registered serials, and (depending on
+what else that network reaches) potentially reach `/api/provision-request`
+from further away than intended. Treat the isolation controls above as
+part of the deployment, not an optional hardening step layered on later.
+
 ## Container
 
 **Containerfile** builds `localhost/drawbridge:latest` as a multi-stage

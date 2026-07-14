@@ -3,6 +3,20 @@
 A hardened, classic Zero Touch Provisioning (ZTP) system for Cisco IOS XE
 devices — without relying on Cisco's PKI/Secure ZTP infrastructure.
 
+> **⚠️ Network isolation is strongly recommended.** Drawbridge's device
+> phone-home call is necessarily unauthenticated (a device has no credential
+> on first contact — see [decisions.md](docs/decisions.md), "No sZTP"), so
+> anyone who can reach the provisioning VLAN can enumerate registered device
+> serials. Drawbridge's allowlist, HTTPS delivery, and hash verification
+> protect *what* gets provisioned; they cannot protect against an attacker
+> already on that VLAN. Drawbridge does not enforce network isolation and
+> will run without it, but doing so knowingly widens who can reach it beyond
+> what its own protections cover. **Run it on a physically/logically
+> isolated provisioning VLAN with switch/firewall controls (802.1X, port
+> security, DHCP snooping) restricting who can attach to it.** See
+> [docs/deployment.md](docs/deployment.md#network-isolation--strongly-recommended)
+> before deploying.
+
 ## Why
 
 Classic ZTP is simple but insecure. Cisco's Secure ZTP (RFC 8572) fixes that,
@@ -35,6 +49,7 @@ provisioning, then dropped in favor of a retention-bounded provisioning log.
 | [Deployment](docs/deployment.md) | Containerfile, Quadlet, dev setup, environment variables |
 | [Testing](docs/testing.md) | Testing approach and key cases |
 | [Decisions & Constraints](docs/decisions.md) | Design tradeoffs and the reasoning behind each |
+| [Security FAQ](docs/security-faq.md) | Known attack vectors in plain terms, what's actually exploitable today, and how to protect a deployment |
 
 ## Quick Start
 
