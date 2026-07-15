@@ -1,21 +1,56 @@
 # Beta
 
-## Implementation overview
-
-Dependency order across all sections below: **Phase 1 (TLS cert bootstrap)**
-gates the HTTPS-transport and Containerization sections; **Payload integrity
-verification** gates HTTPS transport (both touch `provision-request`'s
-response shape, land together); **ZTP client logging**'s container/supervisor
-step gates its own server-side and device-side steps, and gates
-Containerization. Password/Session hardening, SAML, and Multi-vendor Juniper
-support are independent of everything else and of each other — parallelizable.
-
-**Migration scope:** beta is a fresh install, not an in-place alpha→beta
+Drawbridge Beta requires a fresh install, there is no in-place alpha→beta
 upgrade. New columns (`User.claim_token`) and tables (`DeviceLogEntry`) rely
-on `create_all()` alone — no Alembic, no ad-hoc migration shim. An existing
-alpha SQLite DB is not expected to upgrade in place.
+on `create_all()` alone
 
-## Password & Session Security Improvements
+## 1. Migrate frontend from JavaScript to TypeScript 7
+
+`frontend/src/` is 100% plain JavaScript today — no `tsconfig.json`, no type
+checking at all. Several beta items below touch shared state shape across
+store/component boundaries (the claim-token field threading through
+`stores/auth.js`, new `stores/deviceLogs.js` mirroring `stores/log.js`,
+confirm-password fields across three forms) — exactly where a renamed or
+missing field breaks silently at runtime instead of at build time. TypeScript
+7 (`@typescript/native-preview`, the Go-ported compiler) is a drop-in
+replacement for `tsc`'s CLI/language service, so there's no extra cost to
+adopting it now over adopting classic TS.
+
+**Decision: incremental in-place migration, not a rewrite.** `allowJs: true`
+keeps the app building at every commit — no separate "TS branch" to land in
+one PR.
+
+**Implementation plan:**
+
+- Add `typescript` (`@typescript/native-preview`) and `vue-tsc` to
+  `frontend/package.json` devDependencies. Vite's transform (esbuild/rolldown)
+  strips types but never checks them, so `vue-tsc --noEmit` is the actual
+  type-check step, and it needs to run somewhere real, not just trusted to
+  editor tooling.
+- New `frontend/tsconfig.json`: `strict: true`, `allowJs: true` (drops once
+  the last `.js` file converts), `vueCompilerOptions` pointing `vue-tsc` at
+  `.vue` files.
+- Convert file-by-file, leaves of the dependency graph first: `utils/format.js`,
+  `utils/fileTypes.js` → `api/client.js`, `api/filesClient.js` →
+  `stores/*.js` (six files) → `router/index.js`, `main.js` → each `.vue`
+  file's `<script setup>` block gets `lang="ts"` last (8 files, depend on
+  everything above already being typed).
+- Land this **before** the frontend-touching beta items below (claim-token
+  field, confirm-password fields, `stores/deviceLogs.js`), not after — those
+  are new code in the same files this migration renames; going first means
+  they're written as `.ts`/`lang="ts"` directly instead of being migrated
+  twice.
+- CI: add a frontend job to `.github/workflows/ci.yml` (there isn't one
+  today — `test` is Python-only) running `npm ci && npm run type-check`, a
+  new `package.json` script wrapping `vue-tsc --noEmit`.
+- Docs: `docs/frontend.md` — drop any "plain JS" wording, note the `.ts`
+  convention for new files.
+
+No ESLint/Prettier added alongside this — not asked for, existing repo has
+neither today, out of scope here. `# ponytail: allowJs stays until the last
+.js file converts, flip to false at that point`.
+
+## 2. Password & Session Security Improvements
 
 Alpha's password handling (see [docs/authentication.md](docs/authentication.md))
 made several tradeoffs that were explicitly scoped to "internal,
@@ -25,7 +60,7 @@ less-trusted networks), so the tradeoffs below should be revisited. Nothing
 here is a rewrite — each item is a small, targeted change against the
 existing Werkzeug/Flask-Login setup.
 
-### 1. Set cookie security flags explicitly
+### 2.1. Set cookie security flags explicitly
 
 `drawbridge/main.py` never sets `SESSION_COOKIE_SECURE` or
 `SESSION_COOKIE_SAMESITE` — the app relies entirely on Flask's defaults
@@ -46,7 +81,7 @@ own TLS by default (self-signed cert, always on), so there's no longer an
 session cookie established right after a password check can be read off an
 unencrypted connection.
 
-### 2. Rate-limit `/auth/login`, `/auth/claim`, `/auth/reset-password`
+### 2.2. Rate-limit `/auth/login`, `/auth/claim`, `/auth/reset-password`
 
 None of the three password-entry routes in `drawbridge/api/auth.py` have any
 throttling. `/auth/login` is brute-forceable at whatever rate the network
@@ -67,7 +102,7 @@ gets `WORKERS`× the nominal limit. Accepted for now rather than adding Redis
 speculatively — `# ponytail: per-worker limiter, shared storage if
 multi-worker rate limiting matters`.
 
-### 3. Enforce a minimum password length
+### 2.3. Enforce a minimum password length
 
 `claim()`, `change_password()`, and `reset_password()` in `auth.py` accept
 any non-empty string as `new_password` — a one-character password is valid
@@ -75,7 +110,7 @@ today. Add a length check (e.g. 8+ chars) alongside the existing
 `if not username or not password` guards. This is the cheapest possible
 improvement here and there's no reason to defer it further than alpha.
 
-### 4. Replace the claim race with an admin-issued token
+### 2.4. Replace the claim race with an admin-issued token
 
 Per authentication.md, `/auth/claim` is deliberately passwordless-until-claimed:
 whoever `POST`s a known username first sets its password. Alpha accepted
@@ -94,7 +129,7 @@ via `secrets.token_urlsafe(32)` in `queries.create_user()`. Returned once in
 on success (single-use). Frontend: add a token input field to the claim
 form and thread it through `stores/auth.js`'s `claim()` action.
 
-### 5. Admin-triggered password reset, not delete-and-recreate
+### 2.5. Admin-triggered password reset, not delete-and-recreate
 
 Today, per authentication.md, "an admin who needs to let a user re-claim
 their account deletes and recreates it" — there's no reset path once an
@@ -105,7 +140,7 @@ more error-prone than a dedicated reset. Add an admin-only
 `must_reset_password`, reusing the existing reset-password flow in
 `auth.py` rather than inventing a new one.
 
-### 6. Log failed-auth events without the credentials
+### 2.6. Log failed-auth events without the credentials
 
 Every failure path in `auth.py` (`login`, `reset_password`, `claim`,
 `change_password`) calls `error_response(..., silent=True)`, which skips
@@ -114,9 +149,9 @@ for not logging passwords, but it also means there's currently no signal
 anywhere to notice repeated failed logins against an account. Add a single
 non-silent log line on failure (username + event type only, never the
 password) so brute-force/claim-race attempts are at least visible in logs
-before rate limiting (#2) catches them.
+before rate limiting (#2.2) catches them.
 
-### 7. Pin the password hashing method explicitly
+### 2.7. Pin the password hashing method explicitly
 
 `generate_password_hash()` calls in `auth.py`/`db.py` don't pass a `method`
 argument, so hash strength for *newly created* hashes depends on whatever
@@ -127,7 +162,7 @@ passwords out from under a pinned `requirements.txt` version. `check_password_ha
 reads the method from the stored hash string, so this doesn't require a
 migration of existing hashes.
 
-### 8. Check `login_user()`'s return value (found during beta planning, not originally scoped)
+### 2.8. Check `login_user()`'s return value (found during beta planning, not originally scoped)
 
 `User.is_active` is a real mapped column (default `True`) and correctly
 shadows Flask-Login's `UserMixin.is_active` (verified directly — it's in
@@ -143,7 +178,7 @@ actually sets `is_active=False` (no admin-facing deactivate control exists,
 and building one isn't in scope here) — this just stops the column from
 lying if something sets it in the future.
 
-### 9. Add password-confirm fields to claim/reset/change-password forms
+### 2.9. Add password-confirm fields to claim/reset/change-password forms
 
 None of the three password-entry forms in `Login.vue`/wherever change-password
 lives have a "confirm password" field today — only the store/backend
@@ -152,7 +187,7 @@ submit) alongside the new minimum-length enforcement (#3) and the claim-token
 field (#4).
 
 
-## HTTPS transport between Drawbridge server and ZTP client
+## 3. HTTPS transport between Drawbridge server and ZTP client
 
 A core design pillar of Drawbridge is to make Classic ZTP more secure. One of these security improvements were to securely transport data between the ZTP server and the ZTP client, such as the image and the configuration. This was left out of the Alpha release but should be mandatory for the Beta so that Drawbridge can live up to its goal.
 
@@ -214,7 +249,7 @@ A core design pillar of Drawbridge is to make Classic ZTP more secure. One of th
   strings for both C9200CX and another platform). Update
   `tests/test_kea_config.py`'s Option 67 assertion to `https://`.
 
-## SAML authentication
+## 4. SAML authentication
 
 The beta should include SAML authentication to improve user handling and security. The groudwork has already been layed out for this in the Alpha.
 
@@ -233,7 +268,7 @@ Routes in `drawbridge/api/auth.py` per the plan already written in
 section from "Planned" to implemented; `deployment.md` gets the new config
 mount.
 
-## ZTP client logging
+## 5. ZTP client logging
 
 The Drawbridge server should be able to collect logs from ZTP devices and display them in the GUI. The ZTP script itself should log to the server and also configure the device to send its syslog messages to the server. The logs should be viewable in a separate view where it can be filtered by device or by clicking on the active session row to get that device's log flow. We should device if the log collection should be an optional sidecar rsyslog container or to have rsyslog installed and running inside the Drawbridge container, using a manager like s6-supervise.
 
@@ -281,7 +316,7 @@ the currently single-process `Containerfile` (today: bare
   `architecture.md`), `deployment.md` (new port 514 mapping, new mount if the
   poller needs one, Quadlet snippet).
 
-## Payload integrity verification (image/config/script hash checks)
+## 6. Payload integrity verification (image/config/script hash checks)
 
 [docs/architecture.md](docs/architecture.md) already documents this as part
 of the DHCP flow — step 3 ("Device fetches the ZTP script over HTTPS,
@@ -308,7 +343,7 @@ compute SHA-256 of the downloaded file and compare against these values
 before acting on it; mismatch → fail closed (same posture as a 404 denial),
 no completion report sent.
 
-## Pin device-facing requests to serial+MAC+IP, backed by Kea host reservations
+## 7. Pin device-facing requests to serial+MAC+IP, backed by Kea host reservations
 
 Today, every device-facing route treats each request independently:
 `create_provisioning_session()` ([drawbridge/queries.py:93-113](drawbridge/queries.py#L93))
@@ -379,7 +414,7 @@ inspection at the switch (see [deployment.md](docs/deployment.md),
 in the first place — this item is about closing the cold-fetch/interference
 gap, not about strengthening MAC/IP as an identity.
 
-## Containerization validation (Quadlet/Podman)
+## 8. Containerization validation (Quadlet/Podman)
 
 Both [alpha.md](alpha.md) and [docs/deployment.md](docs/deployment.md) mark
 the Quadlet unit and Podman credential-forwarding behavior (`LoadCredential=`
@@ -410,26 +445,3 @@ current hedging language once confirmed one way or the other. No CI
 smoke-test step added for this — manual validation stays acceptable, per
 this section's own existing text; an automated Quadlet-deploy check in
 `.github/workflows/ci.yml` is an optional stretch, not required for beta.
-
-## Multi-vendor ZTP support (Juniper)
-
-[docs/kea.md](docs/kea.md) and [docs/decisions.md](docs/decisions.md) note
-that `juniper-devices` is already admitted to the DHCP pool via Kea client
-classification, but has no `option-data` and no corresponding ZTP script —
-explicitly scoped as "future work, out of scope for alpha." Not a security
-item, but flagged here since it's an explicit, already-admitted gap rather
-than a hypothetical feature request.
-
-**Decision: stub only, explicitly unvalidated** — there's no real Junos
-hardware to test against, matching the same pattern alpha already used to
-defer real Cisco Day-0 provisioning logic pending hardware access.
-
-**Implementation plan:** minimal `option-data` added to the existing
-`juniper-devices` Kea client class (Junos ZTP's actual boot mechanism
-differs from Cisco's Guestshell/`cli.execute` model — best-effort, flagged
-as unvalidated against real Junos traffic). New `scripts/ztp-junos.py`
-mirroring `ztp-base.py`'s own "alpha stub" pattern and disclaimer
-(phone-home contract only, no real provisioning logic). `tests/test_kea_config.py`
-gets Juniper-class assertions (currently zero — a template already exists to
-copy from the Cisco-class assertions). Docs: `decisions.md`/`kea.md` move
-Juniper from "future work" to "stub implemented, unvalidated."
