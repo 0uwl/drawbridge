@@ -1,8 +1,9 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useSettingsStore } from '../stores/settings'
 import { useUsersStore } from '../stores/users'
+import type { UserCreatePayload } from '../types'
 
 const auth = useAuthStore()
 const settings = useSettingsStore()
@@ -16,12 +17,12 @@ onMounted(() => {
 })
 
 const retentionInput = ref('')
-async function saveRetention() {
+async function saveRetention(): Promise<void> {
   await settings.updateLogRetention(retentionInput.value)
 }
 
-const newUser = reactive({ username: '', role: 'operator' })
-async function createUser() {
+const newUser = reactive<UserCreatePayload>({ username: '', role: 'operator' })
+async function createUser(): Promise<void> {
   const ok = await users.create(newUser.username, newUser.role)
   if (ok) {
     newUser.username = ''

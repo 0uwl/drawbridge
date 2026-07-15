@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
@@ -6,12 +6,12 @@ import { useAuthStore } from '../stores/auth'
 const auth = useAuthStore()
 const router = useRouter()
 
-const mode = ref('login') // 'login' | 'claim' | 'reset'
+const mode = ref<'login' | 'claim' | 'reset'>('login')
 const username = ref('')
 const password = ref('')
 const newPassword = ref('')
 
-async function submit() {
+async function submit(): Promise<void> {
   if (mode.value === 'reset') {
     const ok = await auth.resetPassword(username.value, password.value, newPassword.value)
     if (ok) router.push('/devices')

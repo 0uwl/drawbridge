@@ -13,27 +13,46 @@ described in [authentication.md](authentication.md).
 frontend/
 ├── index.html          ← Vite entry HTML
 ├── package.json
+├── tsconfig.json        ← strict TS config for src/**/*.ts and *.vue
 ├── vite.config.js       ← build output path + dev-server proxy (see below)
 ├── public/
 │   └── favicon.svg
 └── src/
-    ├── main.js          ← mounts App, installs Pinia + Vue Router
+    ├── main.ts          ← mounts App, installs Pinia + Vue Router
     ├── App.vue          ← navbar shell + <router-view/>
     ├── style.css        ← Tailwind/DaisyUI entry point (see Styling below)
+    ├── types.ts         ← shared domain types (API models, unions, ApiError)
     ├── api/
-    │   └── client.js    ← single configured axios instance
+    │   └── client.ts    ← typed axios wrapper (get/post/put/delete resolve to the unwrapped payload)
     ├── stores/          ← one Pinia store per domain (auth, devices, sessions, log, users, settings)
     ├── components/
     │   └── DeviceTabs.vue ← shared tab bar (Active Sessions / Allowlist) used by both device views
     ├── utils/
-    │   └── format.js    ← formatTimestamp() — abbreviates ISO timestamps to the browser's local date/time-to-minute
+    │   └── format.ts    ← formatTimestamp() — abbreviates ISO timestamps to the browser's local date/time-to-minute
     ├── router/
-    │   └── index.js     ← routes + the auth navigation guard
+    │   └── index.ts     ← routes + the auth navigation guard
     └── views/           ← Login, Sessions, Devices, Log, Settings
 ```
 
 `frontend/node_modules/` and `frontend/dist/` are gitignored and
 dockerignored — never commit installed packages or build output.
+
+## TypeScript
+
+All of `src/` is TypeScript (`.ts` modules, `.vue` files use
+`<script setup lang="ts">`) — new files should follow the same convention.
+Shared types live in `src/types.ts`; components/stores import from there
+rather than redefining a shape locally. `npm run type-check` runs
+`vue-tsc --noEmit` and is part of CI (`.github/workflows/ci.yml`'s
+`frontend` job).
+
+`typescript` is pinned to `^6.0.3`, not the TypeScript 7 line, even though
+TS7 has shipped stably as `typescript@7`: TS7's package dropped the classic
+compiler-API surface (`lib/tsc`-style internals) that `vue-tsc` — the tool
+that type-checks `.vue` SFCs — still depends on, so `vue-tsc --noEmit`
+currently fails outright against `typescript@7` with
+`ERR_PACKAGE_PATH_NOT_EXPORTED`. Revisit the pin once `vue-tsc`/
+`@vue/language-tools` ship support for TS7's new API surface.
 
 ## Styling
 

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted } from 'vue'
 import { useLogStore } from '../stores/log'
 import { formatTimestamp } from '../utils/format'

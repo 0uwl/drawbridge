@@ -2,7 +2,7 @@
 // utcnow_iso()) to date + time-to-the-minute in the browser's local
 // timezone. Callers that need full precision should keep the raw ISO
 // string available too, e.g. via a `title` tooltip.
-export function formatTimestamp(iso) {
+export function formatTimestamp(iso: string | null | undefined): string | null {
   if (!iso) return null
   return new Date(iso).toLocaleString(undefined, {
     year: 'numeric',
@@ -14,7 +14,7 @@ export function formatTimestamp(iso) {
 }
 
 // Formats a byte count as a human-readable size (e.g. 1536 -> "1.5 KB").
-export function formatBytes(bytes) {
+export function formatBytes(bytes: number | null | undefined): string | null {
   if (bytes === null || bytes === undefined) return null
   if (bytes === 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']

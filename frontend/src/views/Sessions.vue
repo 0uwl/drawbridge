@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted } from 'vue'
 import { useSessionsStore } from '../stores/sessions'
 import DeviceTabs from '../components/DeviceTabs.vue'

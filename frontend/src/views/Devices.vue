@@ -1,10 +1,11 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useDevicesStore } from '../stores/devices'
 import { useLogStore } from '../stores/log'
 import { useFilesStore } from '../stores/files'
 import DeviceTabs from '../components/DeviceTabs.vue'
 import { formatTimestamp } from '../utils/format'
+import type { DeviceCreatePayload, ProvisioningLog } from '../types'
 
 const devices = useDevicesStore()
 const log = useLogStore()
@@ -20,15 +21,16 @@ const configs = computed(() => files.items.filter((f) => f.file_type === 'config
 const scripts = computed(() => files.items.filter((f) => f.file_type === 'script'))
 
 const showAddModal = ref(false)
-const pendingRemove = ref(null)
+const pendingRemove = ref<string | null>(null)
 
-function lastProvisioned(serial) {
+function lastProvisioned(serial: string): ProvisioningLog | null {
   return log.entries
     .filter((e) => e.serial === serial && e.event === 'provision_complete')
-    .reduce((latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest), null)
+    // ponytail: relies on ISO 8601 string sort order == chronological order
+    .reduce<ProvisioningLog | null>((latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest), null)
 }
 
-const form = reactive({
+const form = reactive<DeviceCreatePayload>({
   serial: '',
   mac: '',
   description: '',
@@ -37,7 +39,7 @@ const form = reactive({
   script: '',
 })
 
-function resetForm() {
+function resetForm(): void {
   form.serial = ''
   form.mac = ''
   form.description = ''
@@ -46,7 +48,7 @@ function resetForm() {
   form.script = ''
 }
 
-async function submitAdd() {
+async function submitAdd(): Promise<void> {
   const ok = await devices.add({ ...form })
   if (ok) {
     resetForm()
@@ -54,9 +56,10 @@ async function submitAdd() {
   }
 }
 
-async function confirmRemove() {
+async function confirmRemove(): Promise<void> {
   const serial = pendingRemove.value
   pendingRemove.value = null
+  if (serial === null) return
   await devices.remove(serial)
 }
 </script>
@@ -96,8 +99,8 @@ async function confirmRemove() {
             <td>{{ d.config_file ?? '—' }}</td>
             <td :title="d.added_at">{{ formatTimestamp(d.added_at) }}</td>
             <td>
-              <span v-if="lastProvisioned(d.serial)" class="badge badge-success" :title="lastProvisioned(d.serial).timestamp">
-                Provisioned {{ formatTimestamp(lastProvisioned(d.serial).timestamp) }}
+              <span v-if="lastProvisioned(d.serial)" class="badge badge-success" :title="lastProvisioned(d.serial)?.timestamp">
+                Provisioned {{ formatTimestamp(lastProvisioned(d.serial)?.timestamp) }}
               </span>
               <span v-else class="badge badge-ghost">Not yet provisioned</span>
             </td>

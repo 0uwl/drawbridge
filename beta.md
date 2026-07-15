@@ -4,17 +4,31 @@ Drawbridge Beta requires a fresh install, there is no in-place alpha→beta
 upgrade. New columns (`User.claim_token`) and tables (`DeviceLogEntry`) rely
 on `create_all()` alone
 
-## 1. Migrate frontend from JavaScript to TypeScript 7
+## 1. Migrate frontend from JavaScript to TypeScript 7 — ✅ Complete
 
-`frontend/src/` is 100% plain JavaScript today — no `tsconfig.json`, no type
+**Status: implemented.** All of `frontend/src/` (utils, api clients, six
+Pinia stores, router, main, all 8 `.vue` files) is TypeScript, with a new
+shared `frontend/src/types.ts`, `frontend/tsconfig.json`, and a `frontend`
+type-check job in `.github/workflows/ci.yml` gating `publish`. One deviation
+from the plan below, found during implementation: **TypeScript 7 itself
+isn't actually used** — see the clarification in the next paragraph.
+
+`frontend/src/` was 100% plain JavaScript before this — no `tsconfig.json`, no type
 checking at all. Several beta items below touch shared state shape across
 store/component boundaries (the claim-token field threading through
 `stores/auth.js`, new `stores/deviceLogs.js` mirroring `stores/log.js`,
 confirm-password fields across three forms) — exactly where a renamed or
 missing field breaks silently at runtime instead of at build time. TypeScript
-7 (`@typescript/native-preview`, the Go-ported compiler) is a drop-in
-replacement for `tsc`'s CLI/language service, so there's no extra cost to
-adopting it now over adopting classic TS.
+7 (the Go-ported compiler, shipped stably as `typescript@7`) is a drop-in
+replacement for `tsc`'s CLI/language service in general, but **not yet for
+this stack specifically**: `typescript@7`'s package dropped the classic
+`lib/tsc`-style compiler-API surface that `vue-tsc` (the only real option for
+type-checking `.vue` SFCs) still requires — confirmed by installing both and
+watching `vue-tsc --noEmit` fail with `ERR_PACKAGE_PATH_NOT_EXPORTED`, not a
+guess. Pin `typescript` to `^6.0.3` (last version with the classic package
+layout) instead, and revisit once `vue-tsc`/`@vue/language-tools` ship
+support for TS7's new API surface — tracked as a follow-up, not blocking
+this migration.
 
 **Decision: incremental in-place migration, not a rewrite.** `allowJs: true`
 keeps the app building at every commit — no separate "TS branch" to land in
@@ -22,8 +36,8 @@ one PR.
 
 **Implementation plan:**
 
-- Add `typescript` (`@typescript/native-preview`) and `vue-tsc` to
-  `frontend/package.json` devDependencies. Vite's transform (esbuild/rolldown)
+- Add `typescript` (pinned `^6.0.3` — not TS7, see the clarification above)
+  and `vue-tsc` to `frontend/package.json` devDependencies. Vite's transform (esbuild/rolldown)
   strips types but never checks them, so `vue-tsc --noEmit` is the actual
   type-check step, and it needs to run somewhere real, not just trusted to
   editor tooling.

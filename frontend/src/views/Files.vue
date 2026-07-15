@@ -1,8 +1,9 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useFilesStore } from '../stores/files'
 import { formatTimestamp, formatBytes } from '../utils/format'
 import { inferFileType, acceptAttr, TYPE_LABELS } from '../utils/fileTypes'
+import type { FileType, StagedFile, UploadStatus } from '../types'
 
 const files = useFilesStore()
 onMounted(() => {
@@ -10,20 +11,21 @@ onMounted(() => {
 })
 
 const showUploadModal = ref(false)
-const pendingRemove = ref(null) // { fileType, filename }
-const staged = ref([]) // [{ file, fileType }] — pre-submit selection, not yet queued
+const pendingRemove = ref<{ fileType: FileType; filename: string } | null>(null)
+const staged = ref<StagedFile[]>([]) // pre-submit selection, not yet queued
 const skippedCount = ref(0)
 
-function openUploadModal() {
+function openUploadModal(): void {
   files.clearFinished()
   staged.value = []
   skippedCount.value = 0
   showUploadModal.value = true
 }
 
-function onSelect(event) {
-  const picked = Array.from(event.target.files)
-  const valid = []
+function onSelect(event: Event): void {
+  const target = event.target as HTMLInputElement
+  const picked = Array.from(target.files ?? [])
+  const valid: StagedFile[] = []
   let skipped = 0
   for (const file of picked) {
     const fileType = inferFileType(file.name)
@@ -35,26 +37,27 @@ function onSelect(event) {
   }
   staged.value = valid
   skippedCount.value = skipped
-  event.target.value = ''
+  target.value = ''
 }
 
-function removeStaged(index) {
+function removeStaged(index: number): void {
   staged.value.splice(index, 1)
 }
 
-function startUpload() {
+function startUpload(): void {
   files.enqueueAndStart(staged.value)
   staged.value = []
   skippedCount.value = 0
 }
 
-async function confirmRemove() {
+async function confirmRemove(): Promise<void> {
+  if (!pendingRemove.value) return
   const { fileType, filename } = pendingRemove.value
   pendingRemove.value = null
   await files.remove(fileType, filename)
 }
 
-function statusBadgeClass(status) {
+function statusBadgeClass(status: UploadStatus): string {
   return {
     queued: 'badge-ghost',
     uploading: 'badge-info',
@@ -64,7 +67,7 @@ function statusBadgeClass(status) {
   }[status]
 }
 
-function statusProgressClass(status) {
+function statusProgressClass(status: UploadStatus): string {
   return {
     queued: '',
     uploading: 'progress-info',
