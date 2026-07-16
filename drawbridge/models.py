@@ -139,6 +139,7 @@ class User(Base, UserMixin):
     username: Mapped[str] = mapped_column(unique=True)
     email: Mapped[str | None]
     password_hash: Mapped[str | None]   # null for SAML-only operators
+    claim_token: Mapped[str | None]     # single-use token gating POST /auth/claim, nulled once claimed
     role: Mapped[str]                   # 'admin' or 'operator'
     auth_source: Mapped[str]            # 'local' or 'saml'
     saml_issuer: Mapped[str | None]     # IdP entity ID, set once SAML lands

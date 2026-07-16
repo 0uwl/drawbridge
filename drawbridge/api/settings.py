@@ -4,6 +4,7 @@ from flask_login import current_user, login_required
 from drawbridge.auth import admin_required
 from drawbridge.db import get_session
 from drawbridge.queries import (
+    clear_user_password,
     count_admins,
     create_user,
     delete_user,
@@ -46,7 +47,9 @@ def create_blueprint():
                 session = get_session()
                 user = create_user(session, username=username, role=role)
                 session.commit()
-                return success_response(f'{username} created', payload=_user_dict(user))
+                return success_response(
+                    f'{username} created', payload={**_user_dict(user), 'claim_token': user.claim_token},
+                )
             case _:
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
@@ -90,6 +93,28 @@ def create_blueprint():
 
             case _:
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
+
+    @bp.post('/users/<int:user_id>/reset-password')
+    @admin_required
+    def admin_reset_password(user_id: int):
+        """Lets an admin force a claimed local account to re-claim a new
+        password, without the delete-and-recreate workaround alpha required.
+        Reuses the claim-token mechanism (POST /auth/claim), not
+        /auth/reset-password — see docs/authentication.md."""
+        session = get_session()
+        user = get_user_by_id(session, user_id)
+        if user is None:
+            return error_response('User not found', 'user_not_found', code=404)
+
+        if user.auth_source != 'local':
+            return error_response('Only local accounts can be reset this way', 'invalid_request', code=400)
+
+        clear_user_password(session, user)
+        session.commit()
+        return success_response(
+            f'{user.username} must claim a new password',
+            payload={**_user_dict(user), 'claim_token': user.claim_token},
+        )
 
     @bp.get('/log')
     @login_required
