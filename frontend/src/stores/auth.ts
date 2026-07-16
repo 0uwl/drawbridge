@@ -90,11 +90,11 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
-    async claim(username: string, password: string): Promise<boolean> {
+    async claim(username: string, password: string, token: string): Promise<boolean> {
       this.loading = true
       this.error = null
       try {
-        await client.post('/auth/claim', { username, password })
+        await client.post('/auth/claim', { username, password, token })
         return true
       } catch (err) {
         this.error = (err as Error).message

@@ -78,24 +78,51 @@ don't need one.
 
 **Subsequent accounts** — an admin creates a user with just a username and a
 role via `POST /api/users`. No password is set at creation time
-(`password_hash` stays `NULL`, `auth_source='local'`). The account is
-unusable via `/login` in this state — `login()` treats a null
-`password_hash` as invalid credentials for both this case and SAML-only
-accounts, so the two must not be conflated.
+(`password_hash` stays `NULL`, `auth_source='local'`), and a single-use
+`claim_token` (`secrets.token_urlsafe(32)`) is generated and returned once in
+that response's payload — never shown again, never included when listing
+users (`GET /api/users`). The account is unusable via `/login` in this state
+— `login()` treats a null `password_hash` as invalid credentials for both
+this case and SAML-only accounts, so the two must not be conflated.
 
-The first person to `POST /api/auth/claim` with that username and a new
-password sets it, filling in `password_hash`. This is deliberately
-passwordless-until-claimed rather than a temp-password/token flow: simpler,
-and accepted as a known tradeoff — since only admins create accounts on an
-internal, network-isolated deployment, the account-takeover race (someone
-else claiming the username first) is treated as low risk for alpha. Revisit
-if Drawbridge's threat model changes (e.g. self-service signup, exposure
-beyond the isolated network).
+`POST /api/auth/claim` requires the matching `token` alongside the username
+and new password; on success `claim_token` is nulled so the token can't be
+reused. This replaces alpha's passwordless-until-claimed race (first `POST`
+with a known username won) — that race is now closed: claiming requires
+something out-of-band (the token, handed to the intended user by the admin
+who created the account), not just guessing or racing on the username.
 
 Once claimed, a user changes their own password later via
-`POST /api/auth/change-password` (requires their current password). There is
-no separate admin-triggered password reset in alpha — an admin who needs to
-let a user re-claim their account deletes and recreates it.
+`POST /api/auth/change-password` (requires their current password). An admin
+can also force a re-claim via `POST /api/users/<id>/reset-password`: it nulls
+`password_hash` and issues a fresh `claim_token`, returned the same way as at
+creation, and the account goes through `POST /api/auth/claim` again — the
+same path a brand-new account uses. This intentionally does **not** reuse
+`POST /api/auth/reset-password`: that route checks the caller's
+*current_password* against `password_hash`, which is impossible to satisfy
+once an admin has nulled it. `must_reset_password` is left untouched by this
+route, since `login()` already refuses a null `password_hash` before ever
+consulting that flag. Only local accounts can be reset this way (400 for
+SAML accounts, which have no local password to reset).
+
+All three password-entry endpoints (`claim`, `reset-password`,
+`change-password`) enforce a minimum password length of 8 characters.
+`generate_password_hash` calls are pinned to `method='scrypt'` explicitly, so
+a future Werkzeug default change can't silently alter hash strength for new
+passwords. Every failed attempt on `login`/`claim`/`reset-password`/
+`change-password` logs a single line (username + event type, e.g.
+`login_failed`, `claim_failed`, `weak_password`) — never the password
+itself — so repeated failures are visible in logs even though the client
+response stays generic. `POST /api/v1/auth/login`, `/claim`, and
+`/reset-password` are also rate-limited per-IP (`Flask-Limiter`, in-memory
+storage — correctly scoped for a single-worker/SQLite deployment; under
+multiple Gunicorn workers the effective limit is per-worker, not global).
+
+`login()`/`reset_password()` also check `login_user()`'s return value: if
+`User.is_active` were ever `False` (nothing in the app sets this today — no
+deactivate-account control exists yet), Flask-Login refuses to establish a
+session, and the route now correctly returns `403 account_inactive` instead
+of a false "logged in" response.
 
 **Deletion** — an admin can delete any other account via `DELETE
 /api/users/<id>` without needing that user's password. Deleting or demoting

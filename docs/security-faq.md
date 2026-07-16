@@ -96,14 +96,23 @@ hardened. Network isolation is again the actual control.
 ## Is my password stored securely?
 
 **Yes, on the backend.** Passwords are hashed with Werkzeug's
-`generate_password_hash`/`check_password_hash` (salted; see
-[authentication.md](authentication.md)) — never stored or logged in
-plaintext. The one place plaintext transiently exists is the bootstrap
-admin password (env var or generated-and-printed), and both of those sources
-force a password reset on first login specifically to bound that exposure —
-see "Bootstrap admin password sources" in authentication.md. Prefer a
-systemd credential (`CREDENTIALS_DIRECTORY`) over `ADMIN_PASSWORD` where
-possible; see [deployment.md](deployment.md).
+`generate_password_hash`/`check_password_hash`, pinned explicitly to
+`method='scrypt'` (salted; see [authentication.md](authentication.md)) —
+never stored or logged in plaintext. A minimum length of 8 characters is
+enforced on claim/reset-password/change-password. The one place plaintext
+transiently exists is the bootstrap admin password (env var or
+generated-and-printed), and both of those sources force a password reset on
+first login specifically to bound that exposure — see "Bootstrap admin
+password sources" in authentication.md. Prefer a systemd credential
+(`CREDENTIALS_DIRECTORY`) over `ADMIN_PASSWORD` where possible; see
+[deployment.md](deployment.md).
+
+Account-claiming is no longer a bare race either: `POST /api/auth/claim`
+requires a single-use `claim_token` minted at account creation (or by an
+admin-triggered reset), closing alpha's "first `POST` with a known username
+wins" tradeoff. `login`/`claim`/`reset-password`/`change-password` are also
+rate-limited per-IP, and every failed attempt logs a username + event line
+(never the password) — see authentication.md for details.
 
 On the frontend, the password lives only in page memory during login/claim/
 reset/change-password calls — never written to `localStorage` or logged.

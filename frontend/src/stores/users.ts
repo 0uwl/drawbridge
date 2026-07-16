@@ -1,9 +1,12 @@
 import { defineStore } from 'pinia'
 import client from '../api/client'
-import type { AdminUser } from '../types'
+import type { AdminUser, ClaimTokenResponse } from '../types'
 
 interface UsersState {
   items: AdminUser[]
+  // Claim token from the most recent create()/resetPassword() call — shown
+  // once to the admin, then discarded; the backend never re-shows it either.
+  lastClaimToken: string | null
   loading: boolean
   error: string | null
 }
@@ -11,6 +14,7 @@ interface UsersState {
 export const useUsersStore = defineStore('users', {
   state: (): UsersState => ({
     items: [],
+    lastClaimToken: null,
     loading: false,
     error: null,
   }),
@@ -33,7 +37,24 @@ export const useUsersStore = defineStore('users', {
       this.loading = true
       this.error = null
       try {
-        await client.post('/users', { username, role })
+        const created = await client.post<ClaimTokenResponse>('/users', { username, role })
+        this.lastClaimToken = created.claim_token
+        await this.list()
+        return true
+      } catch (err) {
+        this.error = (err as Error).message
+        return false
+      } finally {
+        this.loading = false
+      }
+    },
+
+    async resetPassword(id: number): Promise<boolean> {
+      this.loading = true
+      this.error = null
+      try {
+        const reset = await client.post<ClaimTokenResponse>(`/users/${id}/reset-password`)
+        this.lastClaimToken = reset.claim_token
         await this.list()
         return true
       } catch (err) {

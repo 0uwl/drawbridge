@@ -64,7 +64,25 @@ No ESLint/Prettier added alongside this — not asked for, existing repo has
 neither today, out of scope here. `# ponytail: allowJs stays until the last
 .js file converts, flip to false at that point`.
 
-## 2. Password & Session Security Improvements
+## 2. Password & Session Security Improvements — mostly ✅ complete, 2.1 deferred
+
+**Status: 2.2–2.9 implemented.** Two deviations found during implementation,
+both against the plan below:
+
+- **2.1 (cookie flags) is deferred, not implemented.** `SESSION_COOKIE_SECURE
+  = True` makes browsers drop the session cookie over plain HTTP. Section 3
+  (Drawbridge terminating its own TLS) hasn't landed yet — shipping 2.1 now
+  would silently break every plain-HTTP deployment (login 200s, but the
+  browser discards the cookie, so the next request 401s). Revisit once
+  Section 3 ships.
+- **2.5 (admin-triggered reset) reuses the claim-token flow (2.4), not
+  `/auth/reset-password`.** As written below, `reset_password()` requires
+  checking a `current_password` against `password_hash` — impossible once an
+  admin nulls the hash (it would 400 unconditionally). Implemented instead:
+  `POST /api/users/<id>/reset-password` nulls `password_hash` and issues a
+  fresh `claim_token`; the account re-claims via the same token-gated `POST
+  /auth/claim` path 2.4 already hardens. See
+  [docs/authentication.md](docs/authentication.md) for the shipped behavior.
 
 Alpha's password handling (see [docs/authentication.md](docs/authentication.md))
 made several tradeoffs that were explicitly scoped to "internal,
