@@ -82,13 +82,36 @@ sudo chown -R drawbridge:drawbridge /srv/drawbridge
 
 ## Development Setup
 
+`./dev.sh` is the normal entry point: it builds `Containerfile.dev` (Python
++ Node + Playwright/Chromium, kept separate from the production
+`Containerfile`) and runs it with the repo bind-mounted in, so no host
+Python/Node install is required. Inside the container it starts Flask
+(debug/reload) and the Vite dev server (HMR) together — see
+[frontend.md](frontend.md) ("Development workflow"). Browse
+`http://localhost:5173`; `dev.sh` publishes `5173` and `$DRAWBRIDGE_PORT`
+(default `8080`) to the host. `frontend/node_modules` lives in a named
+volume (`drawbridge-dev-node-modules`), not the bind mount, so `npm
+install` output never lands in the host tree. Ctrl-C stops the container,
+resets the dev SQLite database, and offers to run `pytest` and rebuild the
+production image.
+
+```bash
+./dev.sh
+```
+
+For a real headless-browser check of frontend behavior (not just the API
+response) against a running `dev.sh` session, see
+`tests/browser-integration/README.md`.
+
+To run things by hand instead (no container):
+
 ```bash
 # Clone and set up a virtualenv
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Run Flask in dev mode (no container needed)
+# Run Flask in dev mode
 export FLASK_APP=drawbridge/main.py
 export FLASK_DEBUG=1
 export DATABASE_PATH=./dev-data/drawbridge.db
@@ -100,14 +123,9 @@ flask run --port $DRAWBRIDGE_PORT
 # Run tests
 pytest
 
-# Build the container image (multi-stage: builds frontend/, then the Flask image)
+# Build the production container image (multi-stage: builds frontend/, then the Flask image)
 podman build -t localhost/drawbridge:latest .
 ```
-
-The backend dev server above is enough on its own for API/backend work. For
-frontend work, run the Vite dev server alongside it instead of rebuilding
-the container on every change — see [frontend.md](frontend.md)
-("Development workflow").
 
 ## Environment Variables
 

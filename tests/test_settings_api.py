@@ -59,12 +59,21 @@ def test_create_user_returns_422_for_invalid_role(logged_in_admin_client):
 def test_create_user_returns_200_and_no_password_set(app, logged_in_admin_client):
     response = logged_in_admin_client.post(f'{BASE}/users', json={'username': 'new-operator', 'role': 'operator'})
     assert response.status_code == 200
-    assert response.get_json()['payload']['is_claimed'] is False
+    payload = response.get_json()['payload']
+    assert payload['is_claimed'] is False
 
     with app.app_context():
         created = get_user_by_username(get_session(), 'new-operator')
         assert created.password_hash is None
         assert created.auth_source == 'local'
+        assert payload['claim_token'] == created.claim_token
+        assert created.claim_token
+
+
+def test_list_users_never_exposes_claim_token(logged_in_admin_client, user):
+    response = logged_in_admin_client.get(f'{BASE}/users')
+    assert response.status_code == 200
+    assert all('claim_token' not in u for u in response.get_json()['payload'])
 
 
 # PUT /api/v1/users/<id>
@@ -144,6 +153,53 @@ def test_delete_user_allows_deleting_admin_when_another_admin_exists(app, logged
     # bootstrap 'admin' still exists, so deleting admin_user is fine
     response = logged_in_admin_client.delete(f'{BASE}/users/{admin_user.id}')
     assert response.status_code == 200
+
+
+# POST /api/v1/users/<id>/reset-password
+
+def test_admin_reset_password_returns_401_when_not_logged_in(client, user):
+    response = client.post(f'{BASE}/users/{user.id}/reset-password')
+    assert response.status_code == 401
+
+
+def test_admin_reset_password_returns_403_for_operator(logged_in_client, user):
+    response = logged_in_client.post(f'{BASE}/users/{user.id}/reset-password')
+    assert response.status_code == 403
+
+
+def test_admin_reset_password_returns_404_when_not_found(logged_in_admin_client):
+    response = logged_in_admin_client.post(f'{BASE}/users/999999/reset-password')
+    assert response.status_code == 404
+
+
+def test_admin_reset_password_returns_400_for_saml_account(logged_in_admin_client, saml_user):
+    response = logged_in_admin_client.post(f'{BASE}/users/{saml_user.id}/reset-password')
+    assert response.status_code == 400
+
+
+def test_admin_reset_password_nulls_hash_and_issues_new_token(app, logged_in_admin_client, user):
+    response = logged_in_admin_client.post(f'{BASE}/users/{user.id}/reset-password')
+    assert response.status_code == 200
+    payload = response.get_json()['payload']
+    assert payload['claim_token']
+
+    with app.app_context():
+        updated = get_session().get(User, user.id)
+        assert updated.password_hash is None
+        assert updated.claim_token == payload['claim_token']
+
+
+def test_admin_reset_password_allows_reclaim_via_claim_route(client, logged_in_admin_client, user):
+    reset_response = logged_in_admin_client.post(f'{BASE}/users/{user.id}/reset-password')
+    token = reset_response.get_json()['payload']['claim_token']
+
+    claim_response = client.post(f'{BASE}/auth/claim', json={
+        'username': user.username, 'password': 'new-pass-123', 'token': token,
+    })
+    assert claim_response.status_code == 200
+
+    login_response = client.post(f'{BASE}/auth/login', json={'username': user.username, 'password': 'new-pass-123'})
+    assert login_response.status_code == 200
 
 
 # GET /api/v1/log

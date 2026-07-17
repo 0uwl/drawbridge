@@ -1,0 +1,32 @@
+# Local dev/test image only — never used in production (see Containerfile).
+# Bundles Python + Node + a headless Chromium so dev.sh can run the Flask
+# dev server, the Vite dev server, and Playwright browser smoke tests all
+# from inside one container, without requiring a host Python/Node install.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Global install (outside /app) so it survives /app being bind-mounted over
+# at runtime — see scripts/dev-entrypoint.sh and scripts/browser-check.mjs.
+# NODE_PATH is required for scripts under the bind-mounted /app to resolve
+# it: global installs aren't on Node's ESM/CJS lookup path by default.
+RUN npm install -g playwright@1.55 && playwright install --with-deps chromium
+ENV NODE_PATH=/usr/lib/node_modules
+
+COPY scripts/dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
+RUN chmod +x /usr/local/bin/dev-entrypoint.sh
+
+EXPOSE 8080 5173
+
+ENTRYPOINT ["/usr/local/bin/dev-entrypoint.sh"]

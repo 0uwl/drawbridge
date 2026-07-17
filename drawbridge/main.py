@@ -5,8 +5,9 @@ from pathlib import Path
 
 from flask import Flask, jsonify, send_from_directory
 
-from drawbridge.auth import init_login_manager
+from drawbridge.auth import init_login_manager, limiter
 from drawbridge.db import init_db
+from drawbridge.utils import error_response
 
 API_VERSION=1
 API_PREFIX=f'/api/v{API_VERSION}'
@@ -53,6 +54,10 @@ def create_app(config_dict: dict = {}):
 
     if app.testing:
         app.config['LOG_LEVEL'] = 'DEBUG'
+
+    # Off by default under testing so existing tests don't hit 429s; a
+    # rate-limiting test can override this explicitly via config_dict.
+    app.config.setdefault('RATELIMIT_ENABLED', not app.testing)
 
     if app.config['SECRET_KEY'] is None:
         if app.testing:
@@ -103,6 +108,11 @@ def create_app(config_dict: dict = {}):
         os.makedirs(os.path.join(app.config['FILES_PATH'], subdir), exist_ok=True)
 
     init_login_manager(app)
+    limiter.init_app(app)
+
+    @app.errorhandler(429)
+    def _rate_limited(e):
+        return error_response('Too many requests', 'rate_limited', code=429)
 
     with app.app_context():
         init_db(app)

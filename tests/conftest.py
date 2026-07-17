@@ -72,6 +72,9 @@ def admin_user(app):
     return u
 
 
+CLAIM_TOKEN = 'test-claim-token-123'
+
+
 @pytest.fixture()
 def unclaimed_user(app):
     """An admin-created local account that hasn't claimed a password yet."""
@@ -82,6 +85,26 @@ def unclaimed_user(app):
             role='operator',
             auth_source='local',
             password_hash=None,
+            claim_token=CLAIM_TOKEN,
+        )
+        session.add(u)
+        session.commit()
+    return u
+
+
+@pytest.fixture()
+def inactive_user(app):
+    """A local account with is_active=False — nothing in the app sets this
+    today, but login()/reset_password() must still refuse to establish a
+    session for one (see docs/authentication.md)."""
+    with app.app_context():
+        session = get_session()
+        u = User(
+            username='inactive-operator',
+            role='operator',
+            auth_source='local',
+            password_hash=generate_password_hash(PASSWORD),
+            is_active=False,
         )
         session.add(u)
         session.commit()

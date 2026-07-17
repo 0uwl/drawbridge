@@ -7,6 +7,7 @@ that needs several of these in one transaction (e.g. /api/provision-request
 checking a device then creating a ProvisioningSession row) can do so
 atomically.
 """
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
@@ -147,9 +148,9 @@ def count_admins(session: Session) -> int:
 
 def create_user(session: Session, *, username: str, role: str) -> User:
     """Admin-created account: no password set yet — password_hash stays NULL
-    until the user claims it via POST /api/auth/claim (see
-    docs/authentication.md)."""
-    user = User(username=username, role=role, auth_source='local')
+    until the user claims it via POST /api/auth/claim, using the claim_token
+    generated here (see docs/authentication.md)."""
+    user = User(username=username, role=role, auth_source='local', claim_token=secrets.token_urlsafe(32))
     session.add(user)
     return user
 
@@ -162,6 +163,16 @@ def delete_user(session: Session, user_id: int) -> User | None:
         return None
     session.delete(user)
     return user
+
+
+def clear_user_password(session: Session, user: User) -> None:
+    """Admin-triggered reset: nulls password_hash and issues a fresh
+    claim_token so the account re-enters the same POST /auth/claim flow as a
+    newly-created account. Does not call /auth/reset-password's logic —
+    that route requires checking a current_password against password_hash,
+    which is impossible once the hash is nulled."""
+    user.password_hash = None
+    user.claim_token = secrets.token_urlsafe(32)
 
 
 # Setting queries

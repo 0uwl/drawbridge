@@ -73,6 +73,9 @@ export interface AdminUser extends AuthUser {
   last_login_at: string | null
 }
 export type LoginResponse = { must_reset_password: true; username: string } | AuthUser
+// Returned once by POST /users and POST /users/<id>/reset-password — never
+// re-shown afterward, so it's never added to AdminUser itself.
+export type ClaimTokenResponse = AdminUser & { claim_token: string }
 
 // --- frontend-only unions ---
 export type FileType = 'image' | 'config' | 'script'
