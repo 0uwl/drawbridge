@@ -61,6 +61,11 @@ def test_boot_file_name_path_matches_files_download_route(cisco_class):
     assert url_path == '/files/scripts/ztp-base.py'
 
 
+def test_boot_file_name_uses_https(cisco_class):
+    boot_file = next(o for o in cisco_class['option-data'] if o['name'] == 'boot-file-name')
+    assert urlparse(boot_file['data']).scheme == 'https'
+
+
 def test_boot_file_name_host_is_in_configured_subnet(dhcp4_conf, cisco_class):
     boot_file = next(o for o in cisco_class['option-data'] if o['name'] == 'boot-file-name')
     host = urlparse(boot_file['data']).hostname

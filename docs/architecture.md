@@ -15,7 +15,7 @@ an internal, physically isolated provisioning VLAN through:
 - Kea DHCP pre-authorisation gate (lease withheld until Drawbridge approves)
 - Serial number / client-id allowlisting
 - HTTPS script delivery with server certificate validation inside the script
-- SHA-256 hash verification of images and config payloads
+- SHA-256 hash verification of images and config payloads (planned — see [beta.md](../beta.md))
 - Provisioning VLAN isolation — devices can only reach the Drawbridge server
 
 Drawbridge is **not** an inventory management system. It is not the source
@@ -86,7 +86,17 @@ substitute for the script-level gate below.
    vendor-class filter and, for Cisco, returns Option 67 pointing at the
    generic ZTP script — every matching Cisco device gets this, registered
    or not
-3. Device fetches the ZTP script over HTTPS, verifies server cert and payload hash
+3. Device fetches the ZTP script over HTTPS. Drawbridge terminates its own
+   TLS (self-signed by default — see [deployment.md](deployment.md) "TLS").
+   Server cert verification for subsequent device-initiated requests
+   (phone-home, completion callback) is real: on C9200CX, via an IOS XE
+   trustpoint imported by the script itself before its first HTTPS call
+   (Guestshell has no network stack of its own there); on other platforms,
+   directly in Python via `ssl.create_default_context(cadata=...)`. Whether
+   this very first script-delivery fetch itself validates the cert is
+   unconfirmed without lab hardware — see [decisions.md](decisions.md)
+   ("C9200CX network stack isolation" addendum). Payload hash verification
+   is still planned, not yet implemented (see [beta.md](../beta.md)).
 4. Script's first action: reads its own serial via `show version`, calls
    `GET /api/provision-request?serial=...`
 5. Drawbridge checks the SQLite allowlist by serial — known → 200 + a
@@ -97,7 +107,7 @@ substitute for the script-level gate below.
 7. On 200: script proceeds with real provisioning (image/config download,
    hash verification, config push — a later phase; see alpha.md step 5)
 8. Script reports completion by writing a JSON status file and issuing
-   `copy flash:status.json http://<drawbridge>/api/provision-complete` (IOS XE
+   `copy flash:status.json https://<drawbridge>/api/provision-complete` (IOS XE
    `copy` sends a PUT — see [decisions.md](decisions.md) "C9200CX network stack isolation")
 9. Drawbridge writes a `ProvisioningLog` row (time, image, config file) and
    deletes the `ProvisioningSession` row — the `Device` allowlist row

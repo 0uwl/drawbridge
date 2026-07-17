@@ -4,6 +4,7 @@ Flask-Limiter~=3.8
 SQLAlchemy~=2.0
 psycopg[binary]~=3.2
 requests~=2.32
+cryptography~=44.0
 pytest
 gunicorn
 gevent
