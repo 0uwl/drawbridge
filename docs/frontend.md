@@ -143,7 +143,18 @@ def serve_frontend(path):
 
 Two distinct workflows, depending on what you're changing:
 
-**Frontend work (the common case) — run both servers separately:**
+**Frontend work (the common case) — `./dev.sh`:**
+
+`dev.sh` builds and runs `Containerfile.dev` (Python + Node + Playwright,
+not the production `Containerfile`), which starts both Flask (debug/reload)
+and the Vite dev server (HMR) together inside the container, with the repo
+bind-mounted in and `frontend/node_modules` backed by a named volume so
+installed packages don't land in the host tree. No local Python/Node
+install needed. Browse `http://localhost:5173` (Vite's dev server), not the
+backend port directly.
+
+Running the two dev servers by hand (no container) works the same way, if
+preferred:
 
 ```bash
 # terminal 1: the real backend
@@ -155,14 +166,19 @@ npm install   # first time only
 npm run dev
 ```
 
-Browse `http://localhost:5173` (Vite's dev server), not the backend port.
 Vite's `server.proxy` config forwards `/api`, `/files`, and `/health`
 requests to `http://127.0.0.1:$DRAWBRIDGE_PORT` (default `8080` if unset —
 see [deployment.md](deployment.md)), so the SPA calls the real Flask
 backend while you get instant HMR for `.vue` component changes. `dev.sh`
-exports `DRAWBRIDGE_PORT` before starting both processes, so this matches
-automatically when both are started that way; set it by hand in each
-terminal above if running them separately on a non-default port.
+exports `DRAWBRIDGE_PORT` before starting both processes (inside the
+container or, when run by hand, in each terminal), so this matches
+automatically.
+
+For a real-browser check that frontend behavior actually renders as
+expected (not just that the API returns the right status), see
+`tests/browser-integration/README.md` — it runs a headless Chromium
+against a live `dev.sh` session using the Playwright install already baked
+into `Containerfile.dev`.
 
 **Checking the fully-baked integration — build once, serve through Flask:**
 

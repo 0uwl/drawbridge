@@ -37,6 +37,10 @@ run in the default suite — see `tests/kea-integration/README.md` for the
 separate, opt-in, container-based tiers that require a real Kea process
 and are not part of `pytest`.
 
+`tests/browser-integration/` is a similar opt-in, non-`pytest` tier for
+frontend behavior that only shows up in a real browser (e.g. whether a
+failed login actually renders an error message) — see its README.
+
 Run with:
 ```bash
 pytest -v

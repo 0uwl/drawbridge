@@ -25,7 +25,7 @@ export const useAuthStore = defineStore('auth', {
       this.error = null
       this.pendingReset = null
       try {
-        const payload = await client.post<LoginResponse>('/auth/login', { username, password })
+        const payload = await client.post<LoginResponse>('/auth/login', { username, password }, { skip401Redirect: true })
         if ('must_reset_password' in payload) {
           this.pendingReset = payload.username
         } else {
