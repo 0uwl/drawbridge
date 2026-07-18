@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN npm install -g playwright@1.55 && playwright install --with-deps chromium
 ENV NODE_PATH=/usr/lib/node_modules
 
-COPY scripts/dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
+COPY dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
 RUN chmod +x /usr/local/bin/dev-entrypoint.sh
 
 EXPOSE 8080 5173
