@@ -73,13 +73,28 @@ build:
   - `/app/data` and `/app/files` are mount points — do not COPY content there
   - Root filesystem is read-only at runtime; `/tmp` and `/run` are tmpfs
 
-**Quadlet** at `~/.config/containers/systemd/drawbridge.container` (as
-`drawbridge` user). See `quadlet/drawbridge.container` in this repo.
+**Quadlet** at `~/.config/containers/systemd/drawbridge.container`, run as
+whichever user invokes it — there's no dedicated `drawbridge` system user.
+See `quadlet/drawbridge.container` in this repo. [install.sh](../install.sh)
+installs it there automatically for the invoking user (`$SUDO_USER` when run
+via `sudo`), skipping the copy if a unit already exists so a previously-edited
+one is never overwritten.
 
-Host directories must exist before starting:
+Drawbridge is expected to run as a rootless Podman container with the same
+permissions as the invoking user. The data directories used for the
+container must therefore be owned by that user. It's recommended to create a
+folder under that user's own XDG data dir, not a root-owned path like `/srv`,
+so no `sudo`/`chown` is needed.
+
+Must exist before starting:
 ```bash
-sudo mkdir -p /srv/drawbridge/{data,files}
-sudo chown -R drawbridge:drawbridge /srv/drawbridge
+mkdir -p ~/.local/share/drawbridge/{data,files}
+```
+
+Then, after editing `SECRET_KEY` (and `ADMIN_PASSWORD` or `LoadCredential=`)
+in the installed unit:
+```bash
+systemctl --user daemon-reload && systemctl --user start drawbridge
 ```
 
 ## TLS

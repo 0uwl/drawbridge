@@ -1,14 +1,16 @@
 # Reference Quadlet unit for beta.md item 8.
 #
-# Install (rootless, as the `drawbridge` user):
+# install.sh installs this automatically (skipped if a unit already exists,
+# so an edited copy is never overwritten). To install by hand instead,
+# rootless as the user that will run the container:
 #   cp quadlet/drawbridge.container ~/.config/containers/systemd/drawbridge.container
 #   # fill in SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) below
 #   systemctl --user daemon-reload
 #   systemctl --user start drawbridge
 #
-# Host prep (see docs/deployment.md, "Container"):
-#   sudo mkdir -p /srv/drawbridge/{data,files}
-#   sudo chown -R drawbridge:drawbridge /srv/drawbridge
+# Host prep (see docs/deployment.md, "Container") — rootless, so this lives
+# under the invoking user's own XDG data dir, no sudo/chown needed:
+#   mkdir -p ~/.local/share/drawbridge/{data,files}
 #
 # Full description of every variable below: docs/deployment.md
 # ("Environment Variables").
@@ -31,9 +33,12 @@ PublishPort=8080:8080
 # /app/data holds the SQLite DB (unless DATABASE_PATH below points
 # at Postgres) and the auto-generated TLS cert/key under data/tls/.
 # /app/files holds uploaded images/configs/scripts served to devices.
-# :Z relabels for SELinux hosts; harmless if SELinux is disabled.
-Volume=/srv/drawbridge/data:/app/data:Z
-Volume=/srv/drawbridge/files:/app/files:Z
+# %h expands to the invoking user's home directory (systemd specifier) —
+# rootless, so these live under the user's own XDG data dir, not a
+# root-owned path like /srv. :Z relabels for SELinux hosts; harmless if
+# SELinux is disabled.
+Volume=%h/.local/share/drawbridge/data:/app/data:Z
+Volume=%h/.local/share/drawbridge/files:/app/files:Z
 
 # --- Required ---
 # Flask/Flask-Login session-signing key. No default — the app refuses to
