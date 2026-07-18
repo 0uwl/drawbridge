@@ -1,0 +1,122 @@
+# Reference Quadlet unit for beta.md item 8.
+#
+# Install (rootless, as the `drawbridge` user):
+#   cp quadlet/drawbridge.container ~/.config/containers/systemd/drawbridge.container
+#   # fill in SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) below
+#   systemctl --user daemon-reload
+#   systemctl --user start drawbridge
+#
+# Host prep (see docs/deployment.md, "Container"):
+#   sudo mkdir -p /srv/drawbridge/{data,files}
+#   sudo chown -R drawbridge:drawbridge /srv/drawbridge
+#
+# Full description of every variable below: docs/deployment.md
+# ("Environment Variables").
+
+[Unit]
+Description=Drawbridge ZTP server
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/drawbridge:latest
+ContainerName=drawbridge
+
+# Gunicorn binds 0.0.0.0:$DRAWBRIDGE_PORT (8080 by default) and serves both
+# GUI and device-facing (ZTP phone-home/file-serving) traffic over the same
+# HTTPS listener.
+PublishPort=8080:8080
+
+# --- Required ---
+# /app/data holds the SQLite DB (unless DATABASE_PATH below points
+# at Postgres) and the auto-generated TLS cert/key under data/tls/.
+# /app/files holds uploaded images/configs/scripts served to devices.
+# :Z relabels for SELinux hosts; harmless if SELinux is disabled.
+Volume=/srv/drawbridge/data:/app/data:Z
+Volume=/srv/drawbridge/files:/app/files:Z
+
+# --- Required ---
+# Flask/Flask-Login session-signing key. No default — the app refuses to
+# start without it (drawbridge/main.py). Generate once and keep it stable
+# across restarts: rotating it invalidates every live session.
+#   openssl rand -hex 32
+Environment=SECRET_KEY=CHANGE_ME_use_openssl_rand_hex_32
+
+# --- Optionalv---
+# Port Gunicorn binds to inside the container. Update the left side of
+# PublishPort= above to match if you change this.
+#Environment=DRAWBRIDGE_PORT=8080
+
+# Gunicorn worker count. Ignored (forced to 1) whenever DATABASE_PATH
+# resolves to SQLite, the default — only meaningful with Postgres.
+#Environment=WORKERS=4
+
+# App logger verbosity: DEBUG/INFO/WARNING/ERROR.
+#Environment=LOG_LEVEL=INFO
+
+# --- Optional ---
+# SQLite file path by default. Set to a full SQLAlchemy URL
+# (postgresql+psycopg://user:pass@host/db) to use PostgreSQL instead —
+# see docs/database.md.
+#Environment=DATABASE_PATH=/app/data/drawbridge.db
+
+# Per-connection `PRAGMA busy_timeout`, SQLite only.
+#Environment=SQLITE_BUSY_TIMEOUT_MS=1000
+
+# --- Optional ---
+
+# Root directory for managed files inside the container. Only change this
+# alongside the matching Volume= mount above.
+#Environment=FILES_PATH=/app/files
+
+# --- Optional ---
+# Each only applies once, on first boot with an empty database. Change the
+# live value later via the Settings UI / PUT /api/settings/* instead.
+
+#Environment=LOG_RETENTION_DAYS=30
+#Environment=DEFAULT_IMAGE=
+#Environment=DEFAULT_CONFIG_FILE=
+#Environment=DEFAULT_SCRIPT=
+
+# --- Optional ---
+# If neither of these is set, a random password is generated and printed to
+# stdout once on first run.
+
+# Sets the initial admin password directly instead of a random one. Forces
+# a password reset on first login. Has to sit here in plaintext for the
+# container to read it on every restart — prefer LoadCredential= below
+# where possible.
+#Environment=ADMIN_PASSWORD=
+
+# Preferred alternative: load the bootstrap password as a systemd
+# credential instead of plaintext Environment=. Podman forwards loaded
+# credentials into the container and sets CREDENTIALS_DIRECTORY
+# automatically on recent versions — confirm against the Podman version in
+# use (see docs/deployment.md). Unlike ADMIN_PASSWORD, this does NOT force
+# a reset on first login.
+#LoadCredential=admin_password:/path/to/admin-password-secret
+
+# --- Optional ---
+# Drawbridge terminates its own TLS and self-signs a cert/key at these
+# paths on first run if nothing exists there yet. Both default under
+# /app/data, so they persist via the Volume= above with no extra mount —
+# only override if you want to supply your own cert from elsewhere on the
+# host, or mount it separately.
+#Environment=TLS_CERT_PATH=/app/data/tls/cert.pem
+#Environment=TLS_KEY_PATH=/app/data/tls/key.pem
+
+# Local-development escape hatch only — skips TLS, serves plain HTTP.
+# NEVER set this in a deployed Quadlet unit.
+#Environment=TLS_DISABLED=1
+
+# Matches the Containerfile's runtime expectations (docs/deployment.md,
+# "Container"): app only ever writes under /app/data, /app/files, /tmp, /run.
+ReadOnly=true
+Tmpfs=/tmp
+Tmpfs=/run
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

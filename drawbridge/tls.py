@@ -24,6 +24,12 @@ def ensure_cert(cert_path: str, key_path: str) -> None:
     level). Reuses drawbridge/db.py's fcntl.flock bootstrap-lock pattern
     rather than inventing new machinery.
     """
+    # Must exist before _sqlite_lock() below, which opens a lock file
+    # alongside cert_path — on a fresh volume mount, /app/data/tls/ doesn't
+    # exist yet (unlike the DB lock's parent, the volume root itself).
+    Path(cert_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(key_path).parent.mkdir(parents=True, exist_ok=True)
+
     with _sqlite_lock(cert_path):
         if Path(cert_path).exists() and Path(key_path).exists():
             return
@@ -42,9 +48,6 @@ def ensure_cert(cert_path: str, key_path: str) -> None:
             .not_valid_after(now + datetime.timedelta(days=CERT_VALIDITY_DAYS))
             .sign(key, hashes.SHA256())
         )
-
-        Path(cert_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(key_path).parent.mkdir(parents=True, exist_ok=True)
 
         Path(cert_path).write_bytes(cert.public_bytes(serialization.Encoding.PEM))
         Path(key_path).write_bytes(key.private_bytes(
