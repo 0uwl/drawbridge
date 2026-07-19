@@ -490,40 +490,4 @@ inspection at the switch (see [deployment.md](docs/deployment.md),
 in the first place — this item is about closing the cold-fetch/interference
 gap, not about strengthening MAC/IP as an identity.
 
-## 8. Containerization validation (Quadlet/Podman)
-
-Both [alpha.md](alpha.md) and [docs/deployment.md](docs/deployment.md) mark
-the Quadlet unit and Podman credential-forwarding behavior (`LoadCredential=`
-→ `$CREDENTIALS_DIRECTORY`) as "out of scope for alpha sign-off" and
-"confirm this against the Podman version actually in use when this gets
-validated in the containerization phase." Alpha's `quadlet/drawbridge.container`
-was written but never run end-to-end. Beta should actually deploy via the
-Quadlet unit and confirm credential forwarding works as documented (or wire
-the bind-mount fallback for older Podman versions) before relying on the
-"systemd credential doesn't force a password reset" guarantee in
-[docs/authentication.md](docs/authentication.md).
-
-**Correction found during implementation planning:** `quadlet/drawbridge.container`
-does not actually exist anywhere in the repo or git history, despite being
-referenced as if it already does in `architecture.md`'s repo-layout tree,
-`deployment.md`, and this file. This item is bigger than "validate an
-existing unit" — it needs to be **authored from scratch**, then validated.
-Confirmed in scope as such.
-
-**Correction found during implementation:** `/srv/drawbridge/{data,files}`
-requires root to create and `chown` — wrong for a rootless Podman unit,
-which runs as the invoking user. Volume mounts live under that user's own
-XDG data dir instead (`~/.local/share/drawbridge/{data,files}`, `%h` in the
-Quadlet unit), no `sudo`/`chown` needed.
-
-**Implementation plan:** depends on the TLS section above (cert bind mount)
-and the ZTP client logging section above (rsyslog port/mount). Author
-`quadlet/drawbridge.container`: image ref, port mappings (app port +
-`514/udp` for rsyslog), volume mounts for `~/.local/share/drawbridge/{data,files}` +
-the new TLS cert directory, `[Service] LoadCredential=admin_password:...`.
-Actually run it against the installed Podman version; confirm or fix
-`CREDENTIALS_DIRECTORY` forwarding; update `deployment.md` to remove its
-current hedging language once confirmed one way or the other. No CI
-smoke-test step added for this — manual validation stays acceptable, per
-this section's own existing text; an automated Quadlet-deploy check in
-`.github/workflows/ci.yml` is an optional stretch, not required for beta.
+## 8. Containerization validation (Quadlet/Podman) - ✅ Complete
