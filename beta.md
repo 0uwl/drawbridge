@@ -372,7 +372,7 @@ the currently single-process `Containerfile` (today: bare
   `architecture.md`), `deployment.md` (new port 514 mapping, new mount if the
   poller needs one, Quadlet snippet).
 
-## 6. Payload integrity verification (image/config/script hash checks)
+## 6. Payload integrity verification (image/config/script hash checks) — ✅ Complete
 
 [docs/architecture.md](docs/architecture.md) already documents this as part
 of the DHCP flow — step 3 ("Device fetches the ZTP script over HTTPS,
