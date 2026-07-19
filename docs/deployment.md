@@ -67,11 +67,23 @@ build:
   - Non-root user `drawbridge` (UID 1000) created in image
   - `COPY --from=` pulls the built frontend assets from stage 1 into
     `drawbridge/static/` — Node never ships in the final image
-  - Gunicorn as WSGI server, binding `0.0.0.0:$DRAWBRIDGE_PORT` (default
-    `8080`, via `-c drawbridge/gunicorn.conf.py` on the `CMD` — Gunicorn
-    does not discover a config file nested under a subdirectory on its own)
+  - `ENTRYPOINT ["/init"]` (s6-overlay) supervises three sibling services
+    defined under `container/s6-rc.d/`: `gunicorn` (the app itself),
+    `rsyslog` (device syslog collection), and `log-poller`
+    (`drawbridge/log_poller.py`, tails rsyslog's output into the DB). See
+    [logging.md](logging.md) for the full design. Gunicorn binds
+    `0.0.0.0:$DRAWBRIDGE_PORT` (default `8080`, via `-c
+    drawbridge/gunicorn.conf.py` — Gunicorn does not discover a config file
+    nested under a subdirectory on its own)
+  - rsyslog listens on **:10514** inside the container, not the standard
+    :514 — 514 is a privileged port and the image runs as non-root UID 1000
+    throughout (no `CAP_NET_BIND_SERVICE`, no root init phase). The
+    Quadlet unit remaps host `:514` to container `:10514` instead — see
+    `PublishPort=` below
   - `/app/data` and `/app/files` are mount points — do not COPY content there
   - Root filesystem is read-only at runtime; `/tmp` and `/run` are tmpfs
+    (rsyslog's own working directory and the poller's FIFO both live under
+    `/run`, so no extra volume is needed for logging)
 
 **Quadlet** at `~/.config/containers/systemd/drawbridge.container`, run as
 whichever user invokes it — there's no dedicated `drawbridge` system user.
@@ -129,6 +141,32 @@ session doesn't need a trusted cert. This also relaxes
 `SESSION_COOKIE_SECURE` so login still works over plain HTTP. **Never set
 this in a deployed/Quadlet config** — the deployed container always
 terminates TLS.
+
+## Device Syslog Collection
+
+See [logging.md](logging.md) for the full design (rsyslog-in-container via
+s6-overlay, the FIFO→poller→DB path, the `DeviceLogEntry` schema, and the
+two `/api/v1/device-logs` routes). Quadlet publishes both UDP and TCP:
+
+```ini
+PublishPort=514:10514/udp
+PublishPort=514:10514/tcp
+```
+
+No unit test covers the supervisor/rsyslog wiring itself (infra, not
+logic) — verify manually after `podman build`/`podman run`:
+
+```bash
+# TCP
+logger -n <drawbridge-host> -P 514 -T "smoke test tcp"
+# UDP
+logger -n <drawbridge-host> -P 514 -d "smoke test udp"
+```
+
+Then confirm a `source: 'syslog'` row appears via
+`GET /api/v1/device-logs` (requires login) — or, from inside the
+container, `podman logs drawbridge` should show all three s6 services
+(`gunicorn`, `rsyslog`, `log-poller`) start without error.
 
 ## Development Setup
 

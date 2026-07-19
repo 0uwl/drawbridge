@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p /run/rsyslog
+[ -p /run/rsyslog/devicelog.fifo ] || mkfifo /run/rsyslog/devicelog.fifo
+exec rsyslogd -n -i NONE -f /etc/rsyslog-drawbridge.conf

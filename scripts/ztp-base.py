@@ -38,10 +38,6 @@ C9200CX_PLATFORM = 'C9200CX'
 TRUSTPOINT_NAME = 'DRAWBRIDGE-CA'
 
 STATUS_FILENAME = 'status.json'
-STATUS_FLASH_PATH = 'flash:' + STATUS_FILENAME
-# Guestshell's bind-mounted view of flash: — see docs/decisions.md
-# "C9200CX network stack isolation".
-STATUS_LOCAL_PATH = '/bootflash/' + STATUS_FILENAME
 
 PROVISION_REQUEST_FILENAME = 'provision-request.json'
 PROVISION_REQUEST_FLASH_PATH = 'flash:' + PROVISION_REQUEST_FILENAME
@@ -175,15 +171,16 @@ def build_status_payload(serial):
     }
 
 
-def report_status(payload, platform):
-    """Reports completion to Drawbridge. On C9200CX, Guestshell is isolated
-    from the device's own network stack, so the report is done by writing
-    the payload to flash and having IOS XE's own 'copy' command (via
-    cli.execute) issue the HTTP request — see docs/decisions.md. Other real
-    platforms and local testing use direct HTTP requests instead.
+def _put_json(url, payload, platform, filename):
+    """Shared PUT-JSON transport for report_status/log_to_server — both hit
+    Drawbridge with a JSON body and no return value needed, unlike
+    request_provisioning's GET-with-a-return-value shape, so this only
+    unifies those two. On C9200CX, Guestshell is isolated from the device's
+    own network stack, so the report is done by writing the payload to
+    flash and having IOS XE's own 'copy' command (via cli.execute) issue
+    the HTTP request — see docs/decisions.md. Other real platforms and
+    local testing use direct HTTP requests instead.
     """
-    url = 'https://{0}:{1}/api/v1/provision-complete'.format(DRAWBRIDGE_HOST, DRAWBRIDGE_PORT)
-
     try:
         import cli
     except ImportError:
@@ -191,10 +188,10 @@ def report_status(payload, platform):
 
     if cli is not None and platform == C9200CX_PLATFORM:
         _ensure_c9200cx_trustpoint(cli)
-        with open(STATUS_LOCAL_PATH, 'w') as f:
+        with open('/bootflash/' + filename, 'w') as f:
             json.dump(payload, f)
         # IOS XE's 'copy' to an HTTP(S) destination issues a PUT (see decisions.md).
-        cli.execute('copy {0} {1}'.format(STATUS_FLASH_PATH, url))
+        cli.execute('copy flash:{0} {1}'.format(filename, url))
         return
 
     if cli is not None:
@@ -207,19 +204,36 @@ def report_status(payload, platform):
     urllib.request.urlopen(request, timeout=10, context=context)
 
 
+def report_status(payload, platform):
+    """Reports completion to Drawbridge."""
+    url = 'https://{0}:{1}/api/v1/provision-complete'.format(DRAWBRIDGE_HOST, DRAWBRIDGE_PORT)
+    _put_json(url, payload, platform, STATUS_FILENAME)
+
+
+def log_to_server(serial, message, platform):
+    """Reports one log line to Drawbridge's device-log feed (see
+    docs/logging.md) — best-effort, same transport as report_status."""
+    url = 'https://{0}:{1}/api/v1/device-logs'.format(DRAWBRIDGE_HOST, DRAWBRIDGE_PORT)
+    _put_json(url, {'serial': serial, 'message': message}, platform, 'devicelog.json')
+
+
 def main():
     serial = get_serial()
     if serial is None:
         return
 
     platform = get_platform()
+    log_to_server(serial, 'provisioning started', platform)
 
     decision = request_provisioning(serial, platform)
-    if decision is None or not decision.get('success'):
+    approved = decision is not None and decision.get('success')
+    log_to_server(serial, 'provision-request: ' + ('approved' if approved else 'denied/unreachable'), platform)
+    if not approved:
         return  # denied or unreachable — exit cleanly, no completion callback
 
     payload = build_status_payload(serial)
     report_status(payload, platform)
+    log_to_server(serial, 'provisioning complete', platform)
 
 
 if __name__ == '__main__':

@@ -300,9 +300,33 @@ Routes in `drawbridge/api/auth.py` per the plan already written in
 section from "Planned" to implemented; `deployment.md` gets the new config
 mount.
 
-## 5. ZTP client logging
+## 5. ZTP client logging — ✅ Complete
 
 The Drawbridge server should be able to collect logs from ZTP devices and display them in the GUI. The ZTP script itself should log to the server and also configure the device to send its syslog messages to the server. The logs should be viewable in a separate view where it can be filtered by device or by clicking on the active session row to get that device's log flow. We should device if the log collection should be an optional sidecar rsyslog container or to have rsyslog installed and running inside the Drawbridge container, using a manager like s6-supervise.
+
+**Status: implemented**, matching the plan below with two additions found
+during implementation, neither a deviation from the decision itself:
+
+- **Port 514 is privileged; the container stays non-root.** The original
+  plan said "expose port 514 (UDP+TCP)" without addressing that the image
+  runs as `USER drawbridge` (UID 1000) throughout — binding 514 directly
+  would need root or `CAP_NET_BIND_SERVICE`. rsyslog listens on
+  unprivileged `:10514` inside the container instead; Quadlet's
+  `PublishPort=514:10514/udp`+`/tcp` does the remap at the network layer.
+  No root init phase for s6-overlay, no new capability.
+- **Syslog→serial correlation, needed for "filtered by device" to actually
+  work for syslog rows.** The plan noted `serial` is nullable "since
+  syslog may arrive before a serial is parseable" but didn't specify how
+  it ever gets populated. `log_poller.py` matches each line's
+  `%fromhost-ip%` against the active `ProvisioningSession.ip`
+  (`queries.find_active_session_by_ip`) and stamps that session's serial
+  when found — without this, syslog-sourced rows would never carry a
+  serial.
+
+The rsyslog output mechanism (file vs FIFO, left open in the plan below) is
+a named pipe (`ompipe`) — see [docs/logging.md](docs/logging.md) for the
+reasoning. Full design, API shape, and GUI wiring documented there;
+`deployment.md` covers the port mapping and manual smoke test.
 
 **Decision: in-container rsyslog via s6-overlay**, not a sidecar container —
 one image to deploy/update, at the cost of adding a process supervisor to

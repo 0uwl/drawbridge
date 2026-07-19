@@ -51,6 +51,14 @@ export interface ProvisioningLog {
   detail: string | null
 }
 
+export interface DeviceLogEntry {
+  id: number
+  serial: string | null
+  source: 'script' | 'syslog'
+  message: string
+  timestamp: string
+}
+
 export interface ZTPFile {
   file_type: FileType
   filename: string
