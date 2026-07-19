@@ -203,3 +203,6 @@ tracking.
 - Only `provision_complete` and `provision_failed` events land in
   `ProvisioningLog` — lease decisions are not logged. The retention rule
   covers all device-identifying archival data.
+- `DeviceLogEntry` (see [logging.md](logging.md)) is purged by the same
+  `log_retention_days` setting and the same lazy-purge-on-insert pattern —
+  not a second, independently configured retention knob.

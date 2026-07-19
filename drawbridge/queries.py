@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from drawbridge.models import Device, ProvisioningSession, ProvisioningLog, Setting, User, ZTPFile, utcnow_iso
+from drawbridge.models import Device, DeviceLogEntry, ProvisioningSession, ProvisioningLog, Setting, User, ZTPFile, utcnow_iso
 
 # Device queries
 
@@ -89,6 +89,14 @@ def list_sessions(session: Session) -> list[ProvisioningSession]:
 
 def get_provisioning_session(session: Session, serial: str) -> ProvisioningSession | None:
     return session.get(ProvisioningSession, serial)
+
+
+def find_active_session_by_ip(session: Session, ip: str) -> ProvisioningSession | None:
+    """Best-effort match of a syslog line's source IP to the ProvisioningSession
+    that pinned it (see beta.md §7's pin-on-first-use model). The in-flight
+    session table is small (a handful of concurrent ZTP runs at most), so a
+    linear scan needs no new index."""
+    return session.scalar(select(ProvisioningSession).where(ProvisioningSession.ip == ip))
 
 
 def create_provisioning_session(
@@ -275,3 +283,41 @@ def purge_expired_logs(session: Session, retention_days: str) -> None:
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=int(retention_days))).isoformat(timespec='microseconds')
     session.execute(delete(ProvisioningLog).where(ProvisioningLog.timestamp < cutoff))
+
+
+# DeviceLogEntry queries
+
+def add_device_log_entry(
+    session: Session,
+    *,
+    serial: str | None = None,
+    source: str,
+    message: str,
+) -> DeviceLogEntry:
+    """Writes one DeviceLogEntry row, purging expired rows first per the
+    same lazy-retention policy add_log_entry uses (shared log_retention_days
+    setting — see docs/database.md)."""
+    retention = get_setting(session, 'log_retention_days')
+    if retention is not None:
+        purge_expired_device_logs(session, retention.value)
+
+    entry = DeviceLogEntry(serial=serial, source=source, message=message)
+    session.add(entry)
+    return entry
+
+
+def list_device_logs(session: Session, serial: str | None = None) -> list[DeviceLogEntry]:
+    stmt = select(DeviceLogEntry).order_by(DeviceLogEntry.timestamp.desc())
+    if serial is not None:
+        stmt = stmt.where(DeviceLogEntry.serial == serial)
+    return list(session.scalars(stmt).all())
+
+
+def purge_expired_device_logs(session: Session, retention_days: str) -> None:
+    """Deletes DeviceLogEntry rows older than retention_days. A no-op when
+    retention is the literal string 'indefinite' (see purge_expired_logs)."""
+    if retention_days == 'indefinite':
+        return
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=int(retention_days))).isoformat(timespec='microseconds')
+    session.execute(delete(DeviceLogEntry).where(DeviceLogEntry.timestamp < cutoff))

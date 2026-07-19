@@ -93,6 +93,43 @@ def test_report_status_uses_https_and_versioned_api_path(ztp_base):
         ztp_base.DRAWBRIDGE_HOST, ztp_base.DRAWBRIDGE_PORT)
 
 
+def test_log_to_server_uses_https_and_versioned_api_path(ztp_base):
+    with patch('urllib.request.urlopen') as urlopen:
+        ztp_base.log_to_server('TEST-SERIAL-0001', 'hello', 'TEST-PLATFORM')
+
+    request_obj = urlopen.call_args[0][0]
+    assert request_obj.full_url == 'https://{0}:{1}/api/v1/device-logs'.format(
+        ztp_base.DRAWBRIDGE_HOST, ztp_base.DRAWBRIDGE_PORT)
+    body = json.loads(request_obj.data)
+    assert body == {'serial': 'TEST-SERIAL-0001', 'message': 'hello'}
+
+
+def test_main_calls_log_to_server_at_start_request_and_completion_when_approved(ztp_base):
+    with patch('urllib.request.urlopen', _urlopen_returning({'success': True})), \
+         patch.object(ztp_base, 'report_status'), \
+         patch.object(ztp_base, 'log_to_server') as log_to_server:
+        ztp_base.main()
+
+    assert log_to_server.call_count == 3
+    messages = [call.args[1] for call in log_to_server.call_args_list]
+    assert messages[0] == 'provisioning started'
+    assert messages[1] == 'provision-request: approved'
+    assert messages[2] == 'provisioning complete'
+
+
+def test_main_calls_log_to_server_at_start_and_request_only_when_denied(ztp_base):
+    with patch('urllib.request.urlopen', _urlopen_returning({'success': False})), \
+         patch.object(ztp_base, 'report_status') as report_status, \
+         patch.object(ztp_base, 'log_to_server') as log_to_server:
+        ztp_base.main()
+
+    report_status.assert_not_called()
+    assert log_to_server.call_count == 2
+    messages = [call.args[1] for call in log_to_server.call_args_list]
+    assert messages[0] == 'provisioning started'
+    assert messages[1] == 'provision-request: denied/unreachable'
+
+
 def test_c9200cx_imports_trustpoint_before_copy(ztp_base, fake_cli, monkeypatch):
     fake_cli.platform = ztp_base.C9200CX_PLATFORM
     # Simulates an operator who has actually filled in the hand-maintained

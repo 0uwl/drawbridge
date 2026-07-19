@@ -33,7 +33,12 @@ onMounted(() => sessions.list())
           </tr>
         </thead>
         <tbody>
-          <tr v-for="s in sessions.items" :key="s.serial">
+          <tr
+            v-for="s in sessions.items"
+            :key="s.serial"
+            class="cursor-pointer hover"
+            @click="$router.push({ path: '/device-logs', query: { serial: s.serial } })"
+          >
             <td class="font-mono">{{ s.serial }}</td>
             <td>{{ s.mac ?? '—' }}</td>
             <td>{{ s.ip ?? '—' }}</td>

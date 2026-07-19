@@ -115,6 +115,10 @@ def create_app(config_dict: dict = {}):
     app.register_blueprint(settings.create_blueprint(), url_prefix=API_PREFIX)
     app.logger.debug("Registered Blueprint 'settings.py'")
 
+    from drawbridge.api import device_logs
+    app.register_blueprint(device_logs.create_blueprint(), url_prefix=API_PREFIX)
+    app.logger.debug("Registered Blueprint 'device_logs.py'")
+
     for subdir in ('images', 'configs', 'scripts'):
         os.makedirs(os.path.join(app.config['FILES_PATH'], subdir), exist_ok=True)
 

@@ -38,6 +38,14 @@ UserNS=keep-id:uid=1000,gid=1000
 # HTTPS listener.
 PublishPort=8080:8080
 
+# Device syslog collection (see docs/logging.md, beta.md §5). rsyslog
+# inside the container listens on unprivileged :10514, not the standard
+# :514 — 514 is a privileged port and the image runs as non-root UID 1000
+# throughout (no CAP_NET_BIND_SERVICE). Podman remaps the standard port
+# here, at the network layer, instead.
+PublishPort=514:10514/udp
+PublishPort=514:10514/tcp
+
 # --- Required ---
 # /app/data holds the SQLite DB (unless DATABASE_PATH below points
 # at Postgres) and the auto-generated TLS cert/key under data/tls/.

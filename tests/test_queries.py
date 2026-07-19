@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from drawbridge import queries
-from drawbridge.models import ProvisioningLog, ProvisioningSession, Setting
+from drawbridge.models import DeviceLogEntry, ProvisioningLog, ProvisioningSession, Setting
 
 
 # add_device
@@ -181,6 +181,24 @@ def test_delete_provisioning_session(session):
     assert queries.delete_provisioning_session(session, 'SN1') is False
 
 
+def test_find_active_session_by_ip_matches(session):
+    queries.add_device(session, serial='SN1')
+    queries.create_provisioning_session(session, serial='SN1', ip='10.0.0.5')
+    session.commit()
+
+    found = queries.find_active_session_by_ip(session, '10.0.0.5')
+    assert found is not None
+    assert found.serial == 'SN1'
+
+
+def test_find_active_session_by_ip_returns_none_when_no_match(session):
+    queries.add_device(session, serial='SN1')
+    queries.create_provisioning_session(session, serial='SN1', ip='10.0.0.5')
+    session.commit()
+
+    assert queries.find_active_session_by_ip(session, '10.0.0.99') is None
+
+
 # User queries
 
 def test_get_user_by_username_and_id(session):
@@ -288,3 +306,73 @@ def test_add_log_entry_purges_expired_rows_before_inserting(session):
     rows = session.query(ProvisioningLog).all()
     assert len(rows) == 1
     assert rows[0].event == 'provision_complete'
+
+
+# DeviceLogEntry queries
+
+def test_add_device_log_entry_writes_a_row(session):
+    entry = queries.add_device_log_entry(session, serial='SN1', source='script', message='hello')
+    session.commit()
+
+    assert entry.id is not None
+    rows = session.query(DeviceLogEntry).all()
+    assert len(rows) == 1
+    assert rows[0].serial == 'SN1'
+    assert rows[0].source == 'script'
+    assert rows[0].message == 'hello'
+
+
+def test_add_device_log_entry_allows_null_serial(session):
+    entry = queries.add_device_log_entry(session, source='syslog', message='raw line')
+    session.commit()
+
+    assert entry.serial is None
+
+
+def test_list_device_logs_filters_by_serial(session):
+    queries.add_device_log_entry(session, serial='SN1', source='script', message='a')
+    queries.add_device_log_entry(session, serial='SN2', source='script', message='b')
+    session.commit()
+
+    all_entries = queries.list_device_logs(session)
+    assert len(all_entries) == 2
+
+    filtered = queries.list_device_logs(session, serial='SN1')
+    assert len(filtered) == 1
+    assert filtered[0].message == 'a'
+
+
+def test_purge_expired_device_logs_removes_rows_older_than_retention(session):
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(timespec='microseconds')
+    session.add(DeviceLogEntry(serial='SN1', source='syslog', message='old', timestamp=old_ts))
+    session.commit()
+
+    queries.purge_expired_device_logs(session, '5')
+    session.commit()
+
+    assert session.query(DeviceLogEntry).count() == 0
+
+
+def test_purge_expired_device_logs_is_a_noop_when_retention_is_indefinite(session):
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=9999)).isoformat(timespec='microseconds')
+    session.add(DeviceLogEntry(serial='SN1', source='syslog', message='old', timestamp=old_ts))
+    session.commit()
+
+    queries.purge_expired_device_logs(session, 'indefinite')
+    session.commit()
+
+    assert session.query(DeviceLogEntry).count() == 1
+
+
+def test_add_device_log_entry_purges_expired_rows_before_inserting(session):
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat(timespec='microseconds')
+    session.add(DeviceLogEntry(serial='SN1', source='syslog', message='old', timestamp=old_ts))
+    session.commit()
+    # default retention seeded from LOG_RETENTION_DAYS config ('30')
+
+    queries.add_device_log_entry(session, serial='SN1', source='syslog', message='new')
+    session.commit()
+
+    rows = session.query(DeviceLogEntry).all()
+    assert len(rows) == 1
+    assert rows[0].message == 'new'
