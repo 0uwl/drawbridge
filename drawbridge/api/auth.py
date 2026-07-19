@@ -1,11 +1,12 @@
-from flask import Blueprint, current_app, request
+from flask import Blueprint, Response, current_app, redirect, request
 from flask_login import current_user, login_required, login_user, logout_user
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import generate_password_hash
 
 from drawbridge.auth import limiter
+from drawbridge.auth_backends import CREDENTIAL_BACKENDS, LOCAL
 from drawbridge.db import get_session
 from drawbridge.models import utcnow_iso
-from drawbridge.queries import get_user_by_username
+from drawbridge.queries import get_or_create_saml_user, get_user_by_username
 from drawbridge.utils import error_response, success_response
 
 MIN_PASSWORD_LENGTH = 8
@@ -26,9 +27,11 @@ def create_blueprint():
         session = get_session()
         user = get_user_by_username(session, username)
 
-        # Treat "user not found", "SAML-only account" (no password_hash), and
-        # "wrong password" identically — no username enumeration via error text.
-        if not user or not user.password_hash or not check_password_hash(user.password_hash, password):
+        # Treat "user not found", "account uses a different auth method"
+        # (e.g. SAML-only, no password_hash), and "wrong password"
+        # identically — no username/auth-method enumeration via error text.
+        backend = CREDENTIAL_BACKENDS.get(user.auth_source) if user else None
+        if not backend or not backend.verify_login(user, password):
             _log_auth_failure('login_failed', username)
             return error_response('Invalid credentials', 'unauthorized', code=401, silent=True)
 
@@ -77,8 +80,7 @@ def create_blueprint():
         if (
             not user
             or not user.must_reset_password
-            or not user.password_hash
-            or not check_password_hash(user.password_hash, current_password)
+            or not LOCAL.verify_login(user, current_password)
         ):
             _log_auth_failure('reset_password_failed', username)
             return error_response('Invalid reset request', 'invalid_reset', code=400, silent=True)
@@ -119,12 +121,7 @@ def create_blueprint():
         session = get_session()
         user = get_user_by_username(session, username)
 
-        if (
-            not user
-            or user.auth_source != 'local'
-            or user.password_hash is not None
-            or user.claim_token != token
-        ):
+        if not user or not LOCAL.verify_claim(user, token):
             _log_auth_failure('claim_failed', username)
             return error_response('Invalid claim request', 'invalid_claim', code=400, silent=True)
 
@@ -148,7 +145,7 @@ def create_blueprint():
         if not current_password or not new_password:
             return error_response('Current and new password are required', 'invalid_request', code=400)
 
-        if not current_user.password_hash or not check_password_hash(current_user.password_hash, current_password):
+        if not LOCAL.verify_login(current_user, current_password):
             _log_auth_failure('change_password_failed', current_user.username)
             return error_response('Current password is incorrect', 'invalid_credentials', code=400, silent=True)
 
@@ -173,6 +170,56 @@ def create_blueprint():
     @login_required
     def me():
         return success_response(f"User '{current_user.username}' is authenticated ", payload=_user_payload(current_user))
+
+    return bp
+
+
+def create_saml_blueprint(backend):
+    """Routes live at a top-level /saml prefix, not {API_PREFIX}/auth —
+    IdP-facing SSO/ACS/metadata URLs are registered by hand with the IdP and
+    aren't versioned the way the rest of the API is. `backend` is a
+    SamlAuthBackend (drawbridge/saml.py), constructed once in main.py from
+    SAML_SETTINGS_PATH and passed in here — see docs/authentication.md."""
+    bp = Blueprint(name='saml', import_name=__name__)
+
+    @bp.get('/login')
+    @limiter.limit('10 per minute')
+    def saml_login():
+        if not backend.enabled:
+            return error_response('SAML is not configured', 'saml_disabled', code=404, silent=True)
+        return redirect(backend.login_redirect_url(request))
+
+    @bp.get('/metadata')
+    def saml_metadata():
+        if not backend.enabled:
+            return error_response('SAML is not configured', 'saml_disabled', code=404, silent=True)
+        metadata, errors = backend.metadata(request)
+        if errors:
+            current_app.logger.error(f'invalid SAML SP metadata: {errors}')
+            return error_response('Invalid SP metadata', 'saml_metadata_invalid', code=500)
+        return Response(metadata, mimetype='text/xml')
+
+    @bp.post('/acs')
+    @limiter.limit('10 per minute')
+    def saml_acs():
+        if not backend.enabled:
+            return error_response('SAML is not configured', 'saml_disabled', code=404, silent=True)
+
+        result = backend.process_acs(request)
+        if result is None:
+            _log_auth_failure('saml_acs_failed', '(saml)')
+            return error_response('SAML authentication failed', 'saml_failed', code=401, silent=True)
+
+        issuer, subject, attributes = result
+        session = get_session()
+        user = get_or_create_saml_user(session, issuer=issuer, subject=subject, attributes=attributes)
+        user.last_login_at = utcnow_iso()
+        session.commit()
+
+        error = _login_or_error(user)
+        if error:
+            return error
+        return redirect('/')
 
     return bp
 

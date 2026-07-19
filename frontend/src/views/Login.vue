@@ -97,6 +97,9 @@ async function submit(): Promise<void> {
             {{ mode === 'login' ? 'Log in' : mode === 'claim' ? 'Set password' : 'Set new password' }}
           </button>
         </form>
+
+        <div v-if="mode === 'login'" class="divider text-xs">or</div>
+        <a v-if="mode === 'login'" href="/saml/login" class="btn btn-outline btn-sm">Log in with SSO</a>
       </div>
     </div>
   </div>

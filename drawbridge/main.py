@@ -23,6 +23,7 @@ ADMIN_PASSWORD = None
 CREDENTIALS_DIRECTORY = None
 TLS_CERT_PATH = '/app/data/tls/cert.pem'
 TLS_KEY_PATH = '/app/data/tls/key.pem'
+SAML_SETTINGS_PATH = '/app/data/saml'
 
 # Built Vue SPA (frontend/, baked in at image build time — see
 # docs/frontend.md). static_folder is disabled below so Flask doesn't
@@ -51,6 +52,7 @@ def create_app(config_dict: dict = {}):
     app.config['CREDENTIALS_DIRECTORY'] = os.getenv('CREDENTIALS_DIRECTORY', CREDENTIALS_DIRECTORY)
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')  # no default — see check below
     app.config['TLS_DISABLED'] = bool(os.getenv('TLS_DISABLED'))
+    app.config['SAML_SETTINGS_PATH'] = os.getenv('SAML_SETTINGS_PATH', SAML_SETTINGS_PATH)
 
     if config_dict:
         app.config.update(config_dict)
@@ -96,9 +98,14 @@ def create_app(config_dict: dict = {}):
         return jsonify({'status': 'healthy'}), 200
 
     from drawbridge.api import auth
+    from drawbridge.saml import SamlAuthBackend
     app.register_blueprint(auth.create_blueprint(), url_prefix=f'{API_PREFIX}/auth')
     app.logger.debug("Registered Blueprint 'auth.py'")
-    
+
+    saml_backend = SamlAuthBackend(app.config['SAML_SETTINGS_PATH'])
+    app.register_blueprint(auth.create_saml_blueprint(saml_backend), url_prefix='/saml')
+    app.logger.debug("Registered Blueprint 'saml'")
+
     from drawbridge.api import devices
     app.register_blueprint(devices.create_blueprint(), url_prefix=f'{API_PREFIX}/devices')
     app.logger.debug("Registered Blueprint 'devices.py'")

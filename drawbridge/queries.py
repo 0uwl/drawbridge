@@ -175,6 +175,36 @@ def create_user(session: Session, *, username: str, role: str) -> User:
     return user
 
 
+def get_or_create_saml_user(
+    session: Session, *, issuer: str, subject: str, attributes: dict | None = None, role: str = 'operator',
+) -> User:
+    """Upserts a User keyed on (saml_issuer, saml_subject) — the IdP-issued
+    identity, not username, since SAML accounts self-provision on first
+    assertion instead of being admin-created like local ones. New accounts
+    default to 'operator'; SAML carries no group-to-role mapping (out of
+    scope — see beta.md section 4, "generic SP side only")."""
+    user = session.scalar(select(User).where(User.saml_issuer == issuer, User.saml_subject == subject))
+    if user is not None:
+        return user
+
+    email = None
+    if attributes:
+        values = attributes.get('email') or attributes.get('emailAddress')
+        if values:
+            email = values[0]
+
+    user = User(
+        username=f'saml:{subject}',
+        email=email,
+        role=role,
+        auth_source='saml',
+        saml_issuer=issuer,
+        saml_subject=subject,
+    )
+    session.add(user)
+    return user
+
+
 def delete_user(session: Session, user_id: int) -> User | None:
     """Returns the deleted User (detached, caller's job to check role/admin
     guards before calling) or None if not found."""

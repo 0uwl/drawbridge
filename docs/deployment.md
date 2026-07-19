@@ -168,6 +168,24 @@ Then confirm a `source: 'syslog'` row appears via
 container, `podman logs drawbridge` should show all three s6 services
 (`gunicorn`, `rsyslog`, `log-poller`) start without error.
 
+## SAML SSO
+
+Optional — Drawbridge only enables the `/saml/login`, `/saml/metadata`, and
+`/saml/acs` routes when `SAML_SETTINGS_PATH` points at a directory
+containing a `settings.json` (python3-saml's own settings format: `sp`/`idp`
+blocks with entity IDs, ACS/SSO URLs, and certs). Mount that directory the
+same way `/app/scripts` is mounted; nothing is generated automatically the
+way the self-signed TLS cert is, since SAML needs real coordination with an
+IdP (entity ID and ACS URL registered on their side) — there's no meaningful
+default to fall back to. If no `settings.json` is present, the three routes
+return `404 saml_disabled` and local login is unaffected.
+
+A first-time SAML login self-provisions a Drawbridge `User` row keyed on the
+assertion's issuer + NameID (`role='operator'` by default — SAML carries no
+group-to-role mapping in this release). See
+[authentication.md](authentication.md) for the auth-backend design this
+plugs into.
+
 ## Development Setup
 
 `./dev.sh` is the normal entry point: it builds `Containerfile.dev` (Python
@@ -236,6 +254,7 @@ podman build -t localhost/drawbridge:latest .
 | `TLS_CERT_PATH` | `/app/data/tls/cert.pem` | Path to Drawbridge's TLS certificate. Self-signed and auto-generated here on first run if nothing exists at this path — mount your own cert to use it instead. See "TLS" above |
 | `TLS_KEY_PATH` | `/app/data/tls/key.pem` | Path to Drawbridge's TLS private key. Same first-run-generation behavior as `TLS_CERT_PATH` |
 | `TLS_DISABLED` | unset (TLS on) | **Local development only** — set to `1` to skip TLS and run plain HTTP. Never set in a deployed/Quadlet config. See "TLS" above |
+| `SAML_SETTINGS_PATH` | `/app/data/saml` | Directory containing python3-saml's `settings.json`. SAML routes are disabled (404) unless a `settings.json` exists there — see "SAML SSO" above |
 
 ### Systemd credentials for the bootstrap admin password
 
