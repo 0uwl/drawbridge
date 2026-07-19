@@ -1,3 +1,5 @@
+import logging
+
 from flask import Blueprint, request
 from flask_login import current_user, login_required
 
@@ -19,7 +21,7 @@ def create_blueprint():
             case 'GET':
                 session = get_session()
                 devices = list_devices(session)
-                return success_response('All devices', payload=[d.as_dict() for d in devices])
+                return success_response('Returned all devices', payload=[d.as_dict() for d in devices], level=logging.DEBUG)
             case 'POST':
                 data = request.get_json(silent=True) or {}
                 serial = data.get('serial')
@@ -52,7 +54,7 @@ def create_blueprint():
 
         match (request.method):
             case 'GET':
-                return success_response(f'{serial} delivered', payload=device.as_dict())
+                return success_response(f'{serial} delivered', payload=device.as_dict(), level=logging.DEBUG)
 
             case 'DELETE':
                 if get_provisioning_session(session, serial) is not None:
@@ -77,9 +79,9 @@ def create_blueprint():
             active = get_provisioning_session(db_session, serial)
             if active is None:
                 return error_response(f'Session for {serial} not found', 'session_not_found', code=404)
-            return success_response(f'Session for {serial}', payload=active.as_dict())
+            return success_response(f'Session for {serial}', payload=active.as_dict(), level=logging.DEBUG)
         else:
             active_sessions = list_sessions(db_session)
-            return success_response('Active sessions', payload=[s.as_dict() for s in active_sessions])
+            return success_response('Returned active sessions', payload=[s.as_dict() for s in active_sessions], level=logging.DEBUG)
 
     return bp

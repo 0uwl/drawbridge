@@ -15,7 +15,7 @@ an internal, physically isolated provisioning VLAN through:
 - Kea DHCP pre-authorisation gate (lease withheld until Drawbridge approves)
 - Serial number / client-id allowlisting
 - HTTPS script delivery with server certificate validation inside the script
-- SHA-256 hash verification of images and config payloads
+- SHA-256 hash verification of images and config payloads (planned — see [beta.md](../beta.md))
 - Provisioning VLAN isolation — devices can only reach the Drawbridge server
 
 Drawbridge is **not** an inventory management system. It is not the source
@@ -35,31 +35,30 @@ Provisioning VLAN
 │                                                     │
 │  ┌─────────────────────┐                            │
 │  │  Kea DHCPv4         │  native systemd service,   │
-│  │  port 67 (UDP)      │  vanilla config — no       │
-│  │                     │  hooks, no host             │
-│  │                     │  reservations               │
+│  │  port 67 (UDP)      │  vanilla config - no       │
+│  │                     │  hooks, no host            │
+│  │                     │  reservations              │
 │  └─────────────────────┘                            │
 │  ┌─────────────────────┐                            │
-│  │  Kea Control Agent  │  operator diagnostics only  │
-│  │  127.0.0.1:8081     │  (kea-shell) — Drawbridge    │
+│  │  Kea Control Agent  │  operator diagnostics only │
+│  │  127.0.0.1:8081     │  (kea-shell) - Drawbridge  │
 │  └─────────────────────┘  never calls it            │
 │                                                     │
 │  ┌─────────────────────────────────────────────┐    │
 │  │  Drawbridge container (rootless Podman)     │    │
-│  │  user: drawbridge                           │    │
 │  │  image: localhost/drawbridge:latest         │    │
 │  │                                             │    │
-│  │  Flask app, port 8080 (DRAWBRIDGE_PORT) —    │    │
-│  │  devices phone home here directly           │    │
+│  │  Flask app, port 8080 (DRAWBRIDGE_PORT)     │    │
+│  │  Devices phone home here directly           │    │
 │  │  (/api/provision-request)                   │    │
 │  │                                             │    │
-│  │  /app/data/drawbridge.db (SQLite)           │    │
-│  │  /app/scripts/      (ZTP Python scripts)    │    │
+│  │  /app/data     (Database, certs)            │    │
+│  │  /app/files    (images/configs/scripts)     │    │
 │  └─────────────────────────────────────────────┘    │
 │                                                     │
 │  Host bind mounts:                                  │
-│    /srv/drawbridge/data/    → /app/data/            │
-│    /srv/drawbridge/scripts/ → /app/scripts/ (ro)    │
+│    ~/.local/share/drawbridge/data/  -> /app/data/   │
+│    ~/.local/share/drawbridge/files/ -> /app/files/  │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -86,7 +85,17 @@ substitute for the script-level gate below.
    vendor-class filter and, for Cisco, returns Option 67 pointing at the
    generic ZTP script — every matching Cisco device gets this, registered
    or not
-3. Device fetches the ZTP script over HTTPS, verifies server cert and payload hash
+3. Device fetches the ZTP script over HTTPS. Drawbridge terminates its own
+   TLS (self-signed by default — see [deployment.md](deployment.md) "TLS").
+   Server cert verification for subsequent device-initiated requests
+   (phone-home, completion callback) is real: on C9200CX, via an IOS XE
+   trustpoint imported by the script itself before its first HTTPS call
+   (Guestshell has no network stack of its own there); on other platforms,
+   directly in Python via `ssl.create_default_context(cadata=...)`. Whether
+   this very first script-delivery fetch itself validates the cert is
+   unconfirmed without lab hardware — see [decisions.md](decisions.md)
+   ("C9200CX network stack isolation" addendum). Payload hash verification
+   is still planned, not yet implemented (see [beta.md](../beta.md)).
 4. Script's first action: reads its own serial via `show version`, calls
    `GET /api/provision-request?serial=...`
 5. Drawbridge checks the SQLite allowlist by serial — known → 200 + a
@@ -97,7 +106,7 @@ substitute for the script-level gate below.
 7. On 200: script proceeds with real provisioning (image/config download,
    hash verification, config push — a later phase; see alpha.md step 5)
 8. Script reports completion by writing a JSON status file and issuing
-   `copy flash:status.json http://<drawbridge>/api/provision-complete` (IOS XE
+   `copy flash:status.json https://<drawbridge>/api/provision-complete` (IOS XE
    `copy` sends a PUT — see [decisions.md](decisions.md) "C9200CX network stack isolation")
 9. Drawbridge writes a `ProvisioningLog` row (time, image, config file) and
    deletes the `ProvisioningSession` row — the `Device` allowlist row
@@ -110,11 +119,11 @@ substitute for the script-level gate below.
 
 ```
 drawbridge/
-├── CLAUDE.md                  ← project index, links into docs/
+├── CLAUDE.md                  <- project index, links into docs/
 ├── README.md
-├── docs/                      ← detailed design docs (this file and siblings)
-├── Containerfile              ← builds localhost/drawbridge:latest (multi-stage: builds frontend/, then the Flask image)
-├── frontend/                   ← Vue 3 + Vite admin UI, baked into drawbridge/static at build time (see frontend.md)
+├── docs/                      <- detailed design docs (this file and siblings)
+├── Containerfile              <- builds localhost/drawbridge:latest (multi-stage: builds frontend/, then the Flask image)
+├── frontend/                  <- Vue 3 + Vite admin UI, baked into drawbridge/static at build time (see frontend.md)
 │   ├── package.json
 │   ├── vite.config.js
 │   ├── index.html
@@ -122,28 +131,28 @@ drawbridge/
 │       ├── main.js
 │       └── App.vue
 ├── quadlet/
-│   └── drawbridge.container   ← Podman Quadlet for the drawbridge user
+│   └── drawbridge.container   <- Podman Quadlet for the drawbridge user
 ├── kea/
-│   ├── kea-dhcp4.conf         ← Kea DHCPv4 configuration (vanilla — no hook)
-│   └── kea-ctrl-agent.conf    ← Kea Control Agent (REST API, 127.0.0.1:8081; operator diagnostics only)
+│   ├── kea-dhcp4.conf         <- Kea DHCPv4 configuration (vanilla — no hook)
+│   └── kea-ctrl-agent.conf    <- Kea Control Agent (REST API, 127.0.0.1:8081; operator diagnostics only)
 ├── drawbridge/
 │   ├── __init__.py
-│   ├── main.py                ← Flask app factory and entry point
+│   ├── main.py                <- Flask app factory and entry point
 │   ├── api/
-│   │   ├── leases.py          ← GET /api/provision-request (called by the ZTP script's phone-home step)
-│   │   ├── devices.py         ← CRUD for device allowlist
-│   │   ├── files.py           ← File management endpoints
-│   │   ├── auth.py            ← login/logout, current-user endpoints
-│   │   ├── users.py           ← admin CRUD for operator accounts
-│   │   └── settings.py        ← admin get/set of log-retention setting
-│   ├── db.py                  ← SQLAlchemy engine/session setup and init_db()
-│   ├── models.py              ← Device, ProvisioningLog, Setting, User SQLAlchemy models
-│   ├── auth.py                ← Flask-Login setup (LoginManager, user_loader,
+│   │   ├── leases.py          <- GET /api/provision-request (called by the ZTP script's phone-home step)
+│   │   ├── devices.py         <- CRUD for device allowlist
+│   │   ├── files.py           <- File management endpoints
+│   │   ├── auth.py            <- login/logout, current-user endpoints
+│   │   ├── users.py           <- admin CRUD for operator accounts
+│   │   └── settings.py        <- admin get/set of log-retention setting
+│   ├── db.py                  <- SQLAlchemy engine/session setup and init_db()
+│   ├── models.py              <- Device, ProvisioningLog, Setting, User SQLAlchemy models
+│   ├── auth.py                <- Flask-Login setup (LoginManager, user_loader,
 │   │                             password hashing); future home for the SAML
 │   │                             SP integration (see authentication.md)
-│   └── static/                ← built frontend output (generated, gitignored — see frontend.md)
+│   └── static/                <- built frontend output (generated, gitignored — see frontend.md)
 ├── scripts/
-│   └── ztp-base.py            ← Base ZTP script served to IOS XE devices
+│   └── ztp-base.py            <- Base ZTP script served to IOS XE devices
 ├── tests/
 │   ├── conftest.py
 │   ├── test_lease_api.py

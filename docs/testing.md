@@ -6,8 +6,7 @@ a running Kea instance — the provisioning gate lives in
 routes, which have no Kea dependency at all (no hook, no Control Agent
 calls), so no mocking of anything Kea-related is needed.
 
-The SQLite database for tests uses a temporary file via a `tmp_path` fixture,
-never the production `/srv/drawbridge/data/drawbridge.db`.
+The SQLite database for tests uses a temporary file via a `tmp_path` fixture
 
 Key test cases to cover:
 - `GET /api/provision-request` with known serial → 200

@@ -466,10 +466,16 @@ referenced as if it already does in `architecture.md`'s repo-layout tree,
 existing unit" — it needs to be **authored from scratch**, then validated.
 Confirmed in scope as such.
 
+**Correction found during implementation:** `/srv/drawbridge/{data,files}`
+requires root to create and `chown` — wrong for a rootless Podman unit,
+which runs as the invoking user. Volume mounts live under that user's own
+XDG data dir instead (`~/.local/share/drawbridge/{data,files}`, `%h` in the
+Quadlet unit), no `sudo`/`chown` needed.
+
 **Implementation plan:** depends on the TLS section above (cert bind mount)
 and the ZTP client logging section above (rsyslog port/mount). Author
 `quadlet/drawbridge.container`: image ref, port mappings (app port +
-`514/udp` for rsyslog), volume mounts for `/srv/drawbridge/{data,files}` +
+`514/udp` for rsyslog), volume mounts for `~/.local/share/drawbridge/{data,files}` +
 the new TLS cert directory, `[Service] LoadCredential=admin_password:...`.
 Actually run it against the installed Podman version; confirm or fix
 `CREDENTIALS_DIRECTORY` forwarding; update `deployment.md` to remove its

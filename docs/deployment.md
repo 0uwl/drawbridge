@@ -29,8 +29,10 @@ infrastructure) — which Drawbridge deliberately does not use, per
 
 Drawbridge protects what it can at the application layer:
 - **Serial number allowlisting** — gates which devices get provisioned at all.
-- **HTTPS script delivery with server certificate validation.**
-- **SHA-256 hash verification** of served images and config payloads.
+- **HTTPS transport** — Drawbridge terminates its own TLS (self-signed by
+  default) for all device- and GUI-facing traffic; see "TLS" below.
+- **SHA-256 hash verification** of served images and config payloads
+  (planned — see [beta.md](../beta.md)).
 
 These protect *what* gets provisioned and *to whom* it's addressed. None of
 them can protect against a device already on the provisioning VLAN passively
@@ -71,14 +73,62 @@ build:
   - `/app/data` and `/app/files` are mount points — do not COPY content there
   - Root filesystem is read-only at runtime; `/tmp` and `/run` are tmpfs
 
-**Quadlet** at `~/.config/containers/systemd/drawbridge.container` (as
-`drawbridge` user). See `quadlet/drawbridge.container` in this repo.
+**Quadlet** at `~/.config/containers/systemd/drawbridge.container`, run as
+whichever user invokes it — there's no dedicated `drawbridge` system user.
+See `quadlet/drawbridge.container` in this repo. [install.sh](../install.sh)
+installs it there automatically for the invoking user (`$SUDO_USER` when run
+via `sudo`); if a unit is already present and differs, it prompts to back up
+the old one before overwriting rather than silently skipping or clobbering it.
 
-Host directories must exist before starting:
+Drawbridge is expected to run as a rootless Podman container with the same
+permissions as the invoking user. The data directories used for the
+container must therefore be owned by that user. It's recommended to create a
+folder under that user's own XDG data dir, not a root-owned path like `/srv`,
+so no `sudo`/`chown` is needed.
+
+Must exist before starting:
 ```bash
-sudo mkdir -p /srv/drawbridge/{data,files}
-sudo chown -R drawbridge:drawbridge /srv/drawbridge
+mkdir -p ~/.local/share/drawbridge/{data,files}
 ```
+
+Then, after editing `SECRET_KEY` (and `ADMIN_PASSWORD` or `LoadCredential=`)
+in the installed unit:
+```bash
+systemctl --user daemon-reload && systemctl --user start drawbridge
+```
+
+## TLS
+
+Drawbridge terminates its own TLS by default — both GUI and device-facing
+(ZTP phone-home, file downloads) traffic go through the same HTTPS listener.
+On first run, if `TLS_CERT_PATH`/`TLS_KEY_PATH` don't already exist,
+`drawbridge/tls.py` generates a self-signed cert/key pair there; an operator
+who mounts their own cert/key pair at those paths instead (e.g. a real
+ACME-issued cert, or a shared org CA) has it used as-is — nothing is
+overwritten if the files are already present.
+
+An operator who wants a "real" ACME-issued cert for browser convenience may
+put their own reverse proxy in front of the GUI path only, re-terminating/
+re-encrypting to Drawbridge's own listener. ZTP devices always talk directly
+to Drawbridge's own listener (self-signed or org-mounted cert) — never
+through that optional proxy: Option 67's boot-file URL points at Drawbridge
+directly, and isolated provisioning VLANs generally can't complete ACME
+challenges anyway.
+
+**Device-side cert trust needs a matching CA cert mounted/embedded on the
+device side too**, since a self-signed server cert isn't trusted by anything
+out of the box. `scripts/ztp-base.py`'s `DRAWBRIDGE_CA_CERT_PEM` constant
+(hand-maintained, same posture as `DRAWBRIDGE_HOST`) must be set to
+Drawbridge's actual cert (or its issuing CA) before the script is used
+against real hardware — see [decisions.md](decisions.md) for how this gets
+consumed on each platform branch.
+
+**Local development:** set `TLS_DISABLED=1` to skip TLS entirely and run
+Gunicorn as plain HTTP — a dev convenience so a local `flask run`/`dev.sh`
+session doesn't need a trusted cert. This also relaxes
+`SESSION_COOKIE_SECURE` so login still works over plain HTTP. **Never set
+this in a deployed/Quadlet config** — the deployed container always
+terminates TLS.
 
 ## Development Setup
 
@@ -135,6 +185,7 @@ podman build -t localhost/drawbridge:latest .
 | `DATABASE_PATH` | `/app/data/drawbridge.db` | SQLite database file path, or a full SQLAlchemy URL (e.g. `postgresql+psycopg://user:pass@host/dbname`) to use PostgreSQL instead — see [database.md](database.md) |
 | `WORKERS` | `4` | Number of Gunicorn worker processes. Ignored (forced to `1`) when `DATABASE_PATH` resolves to SQLite — see [database.md](database.md) |
 | `FILES_PATH` | `/app/files` | Root directory for managed files. Subdirectories `images/`, `configs/`, and `scripts/` are created automatically on startup and should each be bind-mounted to the host if granular control is needed |
+| `LOG_LEVEL` | `INFO` | App logger verbosity (`TRACE`/`DEBUG`/`INFO`/`WARNING`/`ERROR`). `TRACE` is a custom level below `DEBUG` — every successful API response logs its message plus the acting username (or `anonymous`) and remote IP; off by default since it fires on routine reads (list devices, list sessions, etc.), not just writes. Forced to `DEBUG` under `app.testing` regardless of this value |
 | `FLASK_DEBUG` | `0` | Set to `1` in local dev only, never in container |
 | `SECRET_KEY` | none — required | Flask session signing key for Flask-Login; must be set explicitly in every environment |
 | `SQLITE_BUSY_TIMEOUT_MS` | `1000` | Per-connection `PRAGMA busy_timeout` (SQLite only) — see [database.md](database.md) |
@@ -144,6 +195,9 @@ podman build -t localhost/drawbridge:latest .
 | `DEFAULT_SCRIPT` | none | Seeds the `default_script` DB setting on first run if set. Used as the fallback ZTP script for newly registered devices that don't specify one. Change the live value via `PUT /api/settings/default-script` |
 | `ADMIN_PASSWORD` | none — random password generated and printed once if unset | Sets the bootstrap admin's initial password on first run only, instead of a random one. Forces a password reset on first login (see [authentication.md](authentication.md), "Bootstrap admin password sources") — prefer `CREDENTIALS_DIRECTORY` below where possible, since this value has to persist in plaintext (a Quadlet unit, a `.env` file) for the container to read it on every restart |
 | `CREDENTIALS_DIRECTORY` | none | Set automatically by systemd when a unit uses `LoadCredential=`/`SetCredential=`; not meant to be set by hand. If a credential named `admin_password` exists in this directory on first run, it seeds the bootstrap admin's password without forcing a reset — see below and [authentication.md](authentication.md) |
+| `TLS_CERT_PATH` | `/app/data/tls/cert.pem` | Path to Drawbridge's TLS certificate. Self-signed and auto-generated here on first run if nothing exists at this path — mount your own cert to use it instead. See "TLS" above |
+| `TLS_KEY_PATH` | `/app/data/tls/key.pem` | Path to Drawbridge's TLS private key. Same first-run-generation behavior as `TLS_CERT_PATH` |
+| `TLS_DISABLED` | unset (TLS on) | **Local development only** — set to `1` to skip TLS and run plain HTTP. Never set in a deployed/Quadlet config. See "TLS" above |
 
 ### Systemd credentials for the bootstrap admin password
 

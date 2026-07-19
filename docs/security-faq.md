@@ -119,13 +119,13 @@ reset/change-password calls — never written to `localStorage` or logged.
 
 ## Is my session cookie safe in transit?
 
-**Depends entirely on your deployment, and Drawbridge doesn't currently
-enforce it.** Neither `SESSION_COOKIE_SECURE` nor `SESSION_COOKIE_SAMESITE`
-is set in `drawbridge/main.py`, so a session cookie can be sent over plain
-HTTP unless you put a TLS-terminating reverse proxy in front of Drawbridge
-yourself. See [beta.md](../beta.md) item 1. **Until this is set explicitly,
-terminate TLS in front of Drawbridge if it's reachable from anywhere you
-don't fully trust.**
+**Yes.** Drawbridge terminates its own TLS by default (self-signed cert,
+always on — see [deployment.md](deployment.md) "TLS"), and
+`SESSION_COOKIE_SECURE`/`SESSION_COOKIE_SAMESITE` are set in
+`drawbridge/main.py` accordingly, so the browser refuses to send the session
+cookie over plain HTTP. The one exception is `TLS_DISABLED=1`, a local-dev-only
+escape hatch that also relaxes the cookie flag to match — never set in a
+deployed/Quadlet config (see deployment.md).
 
 ## Is Drawbridge as secure as Cisco Secure ZTP (RFC 8572)?
 
@@ -134,7 +134,7 @@ solves the phone-home trust problem properly (hardware-rooted device
 identity, Ownership Vouchers, a MASA), but requires trusting Cisco's PKI/
 cloud infrastructure as a third party, which is incompatible with a fully
 airgapped deployment. Drawbridge hardens Classic ZTP instead: serial
-allowlisting, HTTPS transport, and payload hash verification (the last two
+allowlisting, HTTPS transport, and payload hash verification (the last one
 still pending — see beta.md). All of it assumes the provisioning network
 itself is the trust boundary. If your deployment can't guarantee that
 boundary, Drawbridge is the wrong tool — Secure ZTP (accepting the Cisco PKI

@@ -21,6 +21,8 @@ DEFAULT_CONFIG_FILE = None
 DEFAULT_SCRIPT = None
 ADMIN_PASSWORD = None
 CREDENTIALS_DIRECTORY = None
+TLS_CERT_PATH = '/app/data/tls/cert.pem'
+TLS_KEY_PATH = '/app/data/tls/key.pem'
 
 # Built Vue SPA (frontend/, baked in at image build time — see
 # docs/frontend.md). static_folder is disabled below so Flask doesn't
@@ -48,12 +50,21 @@ def create_app(config_dict: dict = {}):
     app.config['ADMIN_PASSWORD'] = os.getenv('ADMIN_PASSWORD', ADMIN_PASSWORD)
     app.config['CREDENTIALS_DIRECTORY'] = os.getenv('CREDENTIALS_DIRECTORY', CREDENTIALS_DIRECTORY)
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')  # no default — see check below
+    app.config['TLS_DISABLED'] = bool(os.getenv('TLS_DISABLED'))
 
     if config_dict:
         app.config.update(config_dict)
 
     if app.testing:
         app.config['LOG_LEVEL'] = 'DEBUG'
+
+    # Beta section 3 makes Drawbridge terminate its own TLS by default (see
+    # drawbridge/gunicorn.conf.py), so there's no longer an "unencrypted
+    # Drawbridge" deployment mode to gate against — except TLS_DISABLED,
+    # the local-dev escape hatch, where SESSION_COOKIE_SECURE would silently
+    # drop the session cookie over plain HTTP instead.
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_SECURE'] = not app.testing and not app.config['TLS_DISABLED']
 
     # Off by default under testing so existing tests don't hit 429s; a
     # rate-limiting test can override this explicitly via config_dict.
