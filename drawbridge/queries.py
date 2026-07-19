@@ -267,6 +267,14 @@ def delete_file(session: Session, file_type: str, filename: str) -> bool:
     return True
 
 
+def update_file_hash(session: Session, file_type: str, filename: str, sha256: str) -> ZTPFile | None:
+    f = session.get(ZTPFile, (file_type, filename))
+    if f is None:
+        return None
+    f.sha256 = sha256
+    return f
+
+
 def list_provisioning_log(session: Session) -> list[ProvisioningLog]:
     """Rows already reflect the retention window — add_log_entry purges
     expired rows lazily on insert (see docs/database.md), so this just

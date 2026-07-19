@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import re
 
 from flask import current_app, jsonify, request
 from flask_login import current_user
@@ -54,3 +55,10 @@ def hash_file(filepath: str) -> str:
             algorithm.update(chunk)
 
     return algorithm.hexdigest()
+
+
+_SHA256_RE = re.compile(r'^[0-9a-fA-F]{64}$')
+
+
+def is_valid_sha256(value: str) -> bool:
+    return bool(_SHA256_RE.fullmatch(value))

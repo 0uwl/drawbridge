@@ -20,16 +20,19 @@ All `/api/*` paths below are versioned — `API_PREFIX` in `main.py` is
 | GET | `/api/v1/devices/sessions` | List all active provisioning sessions |
 | GET | `/api/v1/devices/sessions/<serial>` | Get the active provisioning session for a device |
 | GET | `/files/images` | List uploaded OS images (auth required) |
-| POST | `/files/images` | Upload an OS image (auth required) |
+| POST | `/files/images` | Upload an OS image (auth required). Optional `sha256` form field — if given, must match the uploaded bytes or the upload is rejected (`422 hash_mismatch`); if omitted, the hash is computed and stored automatically |
 | GET | `/files/images/<filename>` | Download an OS image — unauthenticated, served to devices during ZTP |
+| PUT | `/files/images/<filename>` | Update the stored sha256 for an image (auth required) |
 | DELETE | `/files/images/<filename>` | Delete an OS image (auth required) |
 | GET | `/files/configs` | List uploaded config files (auth required) |
-| POST | `/files/configs` | Upload a config file (auth required) |
+| POST | `/files/configs` | Upload a config file (auth required). Same optional `sha256` form field behavior as image upload |
 | GET | `/files/configs/<filename>` | Download a config file — unauthenticated, served to devices during ZTP |
+| PUT | `/files/configs/<filename>` | Update the stored sha256 for a config file (auth required) |
 | DELETE | `/files/configs/<filename>` | Delete a config file (auth required) |
 | GET | `/files/scripts` | List uploaded ZTP scripts (auth required) |
-| POST | `/files/scripts` | Upload a ZTP script (auth required) |
+| POST | `/files/scripts` | Upload a ZTP script (auth required). Same optional `sha256` form field behavior as image upload |
 | GET | `/files/scripts/<filename>` | Download a ZTP script — unauthenticated, served to devices during ZTP (Kea's Option 67 boot-file-name points here, see [kea.md](kea.md)) |
+| PUT | `/files/scripts/<filename>` | Update the stored sha256 for a ZTP script (auth required) |
 | DELETE | `/files/scripts/<filename>` | Delete a ZTP script (auth required) |
 | PUT | `/api/v1/provision-complete` | Device reports provisioning outcome; deletes the `ProvisioningSession` row, writes a `ProvisioningLog` row. The `devices` allowlist row is untouched. POST is also accepted for testing/debugging. |
 | GET | `/api/v1/log` | List provisioning log entries (time, image, config file, outcome) within the retention window |
@@ -47,8 +50,9 @@ All `/api/*` paths below are versioned — `API_PREFIX` in `main.py` is
 | PUT | `/api/v1/settings/log-retention` | Update log retention setting (admin only) |
 
 Every `/api/devices`, `/api/log`, `/api/users`, `/api/settings/*`, and
-`GET /files/*` list / `POST /files/*` upload / `DELETE /files/*` delete route
-requires an authenticated session — see [authentication.md](authentication.md).
+`GET /files/*` list / `POST /files/*` upload / `PUT /files/*` hash-edit /
+`DELETE /files/*` delete route requires an authenticated session — see
+[authentication.md](authentication.md).
 `GET /files/<type>/<filename>` download endpoints are unauthenticated so that
 IOS XE devices can fetch images, configs, and scripts during ZTP without
 credentials; access is restricted at the network level (provisioning VLAN).

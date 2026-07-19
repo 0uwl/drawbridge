@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useFilesStore } from '../stores/files'
 import { formatTimestamp, formatBytes } from '../utils/format'
 import { inferFileType, acceptAttr, TYPE_LABELS } from '../utils/fileTypes'
-import type { FileType, StagedFile, UploadStatus } from '../types'
+import type { FileType, StagedFile, UploadStatus, ZTPFile } from '../types'
 
 const files = useFilesStore()
 onMounted(() => {
@@ -14,6 +14,11 @@ const showUploadModal = ref(false)
 const pendingRemove = ref<{ fileType: FileType; filename: string } | null>(null)
 const staged = ref<StagedFile[]>([]) // pre-submit selection, not yet queued
 const skippedCount = ref(0)
+
+const HEX64 = /^[0-9a-fA-F]{64}$/
+const editingFile = ref<ZTPFile | null>(null)
+const editHashValue = ref('')
+const editHashError = ref<string | null>(null)
 
 function openUploadModal(): void {
   files.clearFinished()
@@ -55,6 +60,23 @@ async function confirmRemove(): Promise<void> {
   const { fileType, filename } = pendingRemove.value
   pendingRemove.value = null
   await files.remove(fileType, filename)
+}
+
+function openEditHash(f: ZTPFile): void {
+  editingFile.value = f
+  editHashValue.value = f.sha256
+  editHashError.value = null
+}
+
+async function saveEditHash(): Promise<void> {
+  if (!editingFile.value) return
+  if (!HEX64.test(editHashValue.value)) {
+    editHashError.value = 'Must be 64 hex characters'
+    return
+  }
+  const { file_type, filename } = editingFile.value
+  const ok = await files.updateHash(file_type, filename, editHashValue.value)
+  if (ok) editingFile.value = null
 }
 
 function statusBadgeClass(status: UploadStatus): string {
@@ -100,7 +122,12 @@ function statusProgressClass(status: UploadStatus): string {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="f in files.items" :key="`${f.file_type}:${f.filename}`">
+          <tr
+            v-for="f in files.items"
+            :key="`${f.file_type}:${f.filename}`"
+            class="cursor-pointer hover"
+            @click="openEditHash(f)"
+          >
             <td class="font-mono">{{ f.filename }}</td>
             <td><span class="badge badge-outline">{{ TYPE_LABELS[f.file_type] }}</span></td>
             <td>{{ formatBytes(f.size_bytes) }}</td>
@@ -109,7 +136,7 @@ function statusProgressClass(status: UploadStatus): string {
             <td>
               <button
                 class="btn btn-error btn-xs"
-                @click="pendingRemove = { fileType: f.file_type, filename: f.filename }"
+                @click.stop="pendingRemove = { fileType: f.file_type, filename: f.filename }"
               >
                 Delete
               </button>
@@ -144,9 +171,15 @@ function statusProgressClass(status: UploadStatus): string {
             <li
               v-for="(s, i) in staged"
               :key="s.file.name + i"
-              class="flex items-center justify-between text-sm bg-base-200 rounded px-2 py-1"
+              class="flex items-center justify-between text-sm bg-base-200 rounded px-2 py-1 gap-2"
             >
               <span class="font-mono truncate">{{ s.file.name }}</span>
+              <input
+                v-model="s.sha256"
+                type="text"
+                placeholder="sha256 (optional)"
+                class="input input-bordered input-xs font-mono w-40"
+              />
               <span class="flex items-center gap-2 shrink-0">
                 <span class="badge badge-outline badge-sm">{{ TYPE_LABELS[s.fileType] }}</span>
                 <span class="text-base-content/60">{{ formatBytes(s.file.size) }}</span>
@@ -201,6 +234,26 @@ function statusProgressClass(status: UploadStatus): string {
         <div class="modal-action">
           <button class="btn" @click="pendingRemove = null">Cancel</button>
           <button class="btn btn-error" @click="confirmRemove">Delete</button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Edit hash modal -->
+    <dialog class="modal" :open="editingFile !== null">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">Edit hash</h3>
+        <p class="py-2 font-mono text-sm">{{ editingFile?.filename }}</p>
+        <input
+          v-model="editHashValue"
+          type="text"
+          class="input input-bordered font-mono w-full"
+          placeholder="sha256"
+        />
+        <p v-if="editHashError" class="text-error text-sm mt-1">{{ editHashError }}</p>
+        <p v-if="files.error" class="text-error text-sm mt-1">{{ files.error }}</p>
+        <div class="modal-action">
+          <button class="btn" @click="editingFile = null">Cancel</button>
+          <button class="btn btn-primary" @click="saveEditHash">Save</button>
         </div>
       </div>
     </dialog>

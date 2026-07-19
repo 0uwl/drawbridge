@@ -8,12 +8,16 @@ from drawbridge.db import get_session
 from drawbridge.models import ZTPFile
 
 BASE = '/files'
+ROUTE_TYPE = {'images': 'image', 'configs': 'config', 'scripts': 'script'}
 
 
-def upload(client, route, filename, content=b'test content'):
+def upload(client, route, filename, content=b'test content', sha256=None):
+    data = {'file': (io.BytesIO(content), filename)}
+    if sha256 is not None:
+        data['sha256'] = sha256
     return client.post(
         f'{BASE}/{route}',
-        data={'file': (io.BytesIO(content), filename)},
+        data=data,
         content_type='multipart/form-data',
     )
 
@@ -163,6 +167,51 @@ def test_upload_image_does_not_appear_in_config_listing(logged_in_client):
     assert response.get_json()['payload'] == []
 
 
+# --- POST /files/<type> — optional sha256 verification on upload ---
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_upload_with_correct_sha256_succeeds(app, logged_in_client, route, filename):
+    content = b'test content'
+    correct_hash = hashlib.sha256(content).hexdigest()
+    response = upload(logged_in_client, route, filename, content, sha256=correct_hash)
+    assert response.status_code == 201
+    with app.app_context():
+        f = get_session().get(ZTPFile, (ROUTE_TYPE[route], filename))
+        assert f is not None
+        assert f.sha256 == correct_hash
+
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_upload_with_wrong_sha256_returns_422(app, logged_in_client, route, filename):
+    content = b'test content'
+    wrong_hash = hashlib.sha256(b'not the real content').hexdigest()
+    response = upload(logged_in_client, route, filename, content, sha256=wrong_hash)
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'hash_mismatch'
+    with app.app_context():
+        assert get_session().get(ZTPFile, (ROUTE_TYPE[route], filename)) is None
+    assert not os.path.isfile(os.path.join(app.config['FILES_PATH'], route, filename))
+
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_upload_with_malformed_sha256_returns_422(logged_in_client, route, filename):
+    response = upload(logged_in_client, route, filename, sha256='not-a-hash')
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'invalid_hash'
+
+
 # --- GET /files/<type>/<filename> — serve ---
 
 def test_serve_image_is_accessible_without_auth(app, client, logged_in_client):
@@ -271,3 +320,45 @@ def test_delete_only_removes_file_of_matching_type(app, logged_in_client):
     upload(logged_in_client, 'configs', 'spine.cfg')
     logged_in_client.delete(f'{BASE}/configs/spine.cfg')
     assert os.path.isfile(os.path.join(app.config['FILES_PATH'], 'images', 'firmware.bin'))
+
+
+# --- PUT /files/<type>/<filename> — edit stored hash ---
+
+VALID_HASH = 'a' * 64
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_put_hash_returns_401_when_not_logged_in(client, route, filename):
+    response = client.put(f'{BASE}/{route}/{filename}', json={'sha256': VALID_HASH})
+    assert response.status_code == 401
+
+
+def test_put_hash_returns_404_when_file_not_found(logged_in_client):
+    response = logged_in_client.put(f'{BASE}/images/nonexistent.bin', json={'sha256': VALID_HASH})
+    assert response.status_code == 404
+    assert response.get_json()['error'] == 'file_not_found'
+
+
+def test_put_hash_returns_422_for_malformed_hash(logged_in_client):
+    upload(logged_in_client, 'images', 'firmware.bin')
+    response = logged_in_client.put(f'{BASE}/images/firmware.bin', json={'sha256': 'not-a-hash'})
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'invalid_hash'
+
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_put_hash_updates_db_record(app, logged_in_client, route, filename):
+    upload(logged_in_client, route, filename)
+    response = logged_in_client.put(f'{BASE}/{route}/{filename}', json={'sha256': VALID_HASH})
+    assert response.status_code == 200
+    assert response.get_json()['payload']['sha256'] == VALID_HASH
+    with app.app_context():
+        f = get_session().get(ZTPFile, (ROUTE_TYPE[route], filename))
+        assert f.sha256 == VALID_HASH
