@@ -95,6 +95,7 @@ export interface QueueItem {
   file: File
   fileType: FileType
   filename: string
+  sha256?: string
   status: UploadStatus
   progress: number
   controller: AbortController | null
@@ -103,6 +104,7 @@ export interface QueueItem {
 export interface StagedFile {
   file: File
   fileType: FileType
+  sha256?: string
 }
 
 // --- create-payload shapes ---

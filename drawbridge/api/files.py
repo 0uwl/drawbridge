@@ -8,8 +8,8 @@ from flask_login import current_user
 from werkzeug.utils import secure_filename
 
 from drawbridge.db import get_session
-from drawbridge.queries import add_file, delete_file, get_file, list_files
-from drawbridge.utils import allowed_file, error_response, success_response
+from drawbridge.queries import add_file, delete_file, get_file, list_files, update_file_hash
+from drawbridge.utils import allowed_file, error_response, is_valid_sha256, success_response
 
 CHUNK_SIZE = 64 * 1024
 
@@ -71,6 +71,10 @@ def _handle_upload(file_type: str):
             code=422,
         )
 
+    expected_sha256 = request.form.get('sha256', '').strip()
+    if expected_sha256 and not is_valid_sha256(expected_sha256):
+        return error_response('sha256 must be 64 hex characters', 'invalid_hash', code=422)
+
     db_session = get_session()
     if get_file(db_session, file_type, safe_name) is not None:
         return error_response(
@@ -98,6 +102,14 @@ def _handle_upload(file_type: str):
             pass
         raise
 
+    if expected_sha256 and digest.hexdigest().lower() != expected_sha256.lower():
+        os.unlink(os.path.join(type_dir, safe_name))
+        return error_response(
+            'Uploaded file does not match the supplied sha256',
+            'hash_mismatch',
+            code=422,
+        )
+
     add_file(
         db_session,
         file_type=file_type,
@@ -108,6 +120,21 @@ def _handle_upload(file_type: str):
     )
     db_session.commit()
     return success_response(f"File '{safe_name}' uploaded", code=201)
+
+
+def _handle_update_hash(file_type: str, filename: str):
+    data = request.get_json(silent=True) or {}
+    sha256 = (data.get('sha256') or '').strip()
+    if not is_valid_sha256(sha256):
+        return error_response('sha256 must be 64 hex characters', 'invalid_hash', code=422)
+
+    db_session = get_session()
+    f = update_file_hash(db_session, file_type, filename, sha256)
+    if f is None:
+        return error_response(f"File '{filename}' not found", 'file_not_found', code=404)
+
+    db_session.commit()
+    return success_response(f"File '{filename}' updated", payload=f.as_dict())
 
 
 def _handle_delete(file_type: str, filename: str):
@@ -130,7 +157,7 @@ def create_blueprint():
     bp = Blueprint('ztp', __name__)
 
     @bp.route('/images', defaults={'filename': None}, methods=['GET', 'POST'])
-    @bp.route('/images/<path:filename>', methods=['GET', 'DELETE'])
+    @bp.route('/images/<path:filename>', methods=['GET', 'PUT', 'DELETE'])
     def images(filename=None):
         if request.method != 'GET' or filename is None:
             if err := _require_auth():
@@ -140,6 +167,9 @@ def create_blueprint():
                 return _handle_serve('image', filename) if filename else _handle_list('image')
             case 'POST':
                 return _handle_upload('image')
+            case 'PUT':
+                assert filename is not None  # PUT route always binds <filename>
+                return _handle_update_hash('image', filename)
             case 'DELETE':
                 assert filename is not None  # DELETE route always binds <filename>
                 return _handle_delete('image', filename)
@@ -147,7 +177,7 @@ def create_blueprint():
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
     @bp.route('/configs', defaults={'filename': None}, methods=['GET', 'POST'])
-    @bp.route('/configs/<path:filename>', methods=['GET', 'DELETE'])
+    @bp.route('/configs/<path:filename>', methods=['GET', 'PUT', 'DELETE'])
     def config_files(filename=None):
         if request.method != 'GET' or filename is None:
             if err := _require_auth():
@@ -157,6 +187,9 @@ def create_blueprint():
                 return _handle_serve('config', filename) if filename else _handle_list('config')
             case 'POST':
                 return _handle_upload('config')
+            case 'PUT':
+                assert filename is not None  # PUT route always binds <filename>
+                return _handle_update_hash('config', filename)
             case 'DELETE':
                 assert filename is not None  # DELETE route always binds <filename>
                 return _handle_delete('config', filename)
@@ -164,7 +197,7 @@ def create_blueprint():
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
     @bp.route('/scripts', defaults={'filename': None}, methods=['GET', 'POST'])
-    @bp.route('/scripts/<path:filename>', methods=['GET', 'DELETE'])
+    @bp.route('/scripts/<path:filename>', methods=['GET', 'PUT', 'DELETE'])
     def scripts(filename=None):
         if request.method != 'GET' or filename is None:
             if err := _require_auth():
@@ -174,6 +207,9 @@ def create_blueprint():
                 return _handle_serve('script', filename) if filename else _handle_list('script')
             case 'POST':
                 return _handle_upload('script')
+            case 'PUT':
+                assert filename is not None  # PUT route always binds <filename>
+                return _handle_update_hash('script', filename)
             case 'DELETE':
                 assert filename is not None  # DELETE route always binds <filename>
                 return _handle_delete('script', filename)

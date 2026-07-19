@@ -56,12 +56,13 @@ export const useFilesStore = defineStore('files', {
 
     // `files` is already filtered to known types by the caller.
     enqueueAndStart(files: StagedFile[]): void {
-      for (const { file, fileType } of files) {
+      for (const { file, fileType, sha256 } of files) {
         this.queue.push({
           id: crypto.randomUUID(),
           file,
           fileType,
           filename: file.name,
+          sha256,
           status: 'queued',
           progress: 0,
           controller: null,
@@ -69,6 +70,21 @@ export const useFilesStore = defineStore('files', {
         })
       }
       this._drainQueue()
+    },
+
+    async updateHash(fileType: FileType, filename: string, sha256: string): Promise<boolean> {
+      this.loading = true
+      this.error = null
+      try {
+        await filesClient.put(`/${TYPE_PLURAL[fileType]}/${filename}`, { sha256 })
+        await this.list()
+        return true
+      } catch (err) {
+        this.error = (err as Error).message
+        return false
+      } finally {
+        this.loading = false
+      }
     },
 
     cancelUpload(id: string): void {
@@ -111,6 +127,7 @@ export const useFilesStore = defineStore('files', {
       const controller = item.controller
       const formData = new FormData()
       formData.append('file', item.file)
+      if (item.sha256) formData.append('sha256', item.sha256)
       try {
         await filesClient.post(`/${TYPE_PLURAL[item.fileType]}`, formData, {
           signal: controller.signal,
