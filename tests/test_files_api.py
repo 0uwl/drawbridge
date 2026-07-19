@@ -5,7 +5,7 @@ import os
 import pytest
 
 from drawbridge.db import get_session
-from drawbridge.models import ZTPFile
+from drawbridge.models import ProvisioningSession, ZTPFile
 
 BASE = '/files'
 ROUTE_TYPE = {'images': 'image', 'configs': 'config', 'scripts': 'script'}
@@ -20,6 +20,19 @@ def upload(client, route, filename, content=b'test content', sha256=None):
         data=data,
         content_type='multipart/form-data',
     )
+
+
+@pytest.fixture()
+def active_session(app):
+    """A bare ProvisioningSession matching the test client's default
+    REMOTE_ADDR — files.py's serve gate only checks IP, so no Device row
+    is needed."""
+    with app.app_context():
+        session = get_session()
+        ps = ProvisioningSession(serial='FJC2517X0AB', ip='127.0.0.1', state='lease_approved')
+        session.add(ps)
+        session.commit()
+    return ps
 
 
 # --- GET /files/<type> — list ---
@@ -214,7 +227,7 @@ def test_upload_with_malformed_sha256_returns_422(logged_in_client, route, filen
 
 # --- GET /files/<type>/<filename> — serve ---
 
-def test_serve_image_is_accessible_without_auth(app, client, logged_in_client):
+def test_serve_image_is_accessible_with_active_session(app, client, logged_in_client, active_session):
     content = b'fake ios xe firmware bytes'
     upload(logged_in_client, 'images', 'firmware.bin', content)
     response = client.get(f'{BASE}/images/firmware.bin')
@@ -222,7 +235,7 @@ def test_serve_image_is_accessible_without_auth(app, client, logged_in_client):
     assert response.data == content
 
 
-def test_serve_config_is_accessible_without_auth(app, client, logged_in_client):
+def test_serve_config_is_accessible_with_active_session(app, client, logged_in_client, active_session):
     content = b'hostname spine-1'
     upload(logged_in_client, 'configs', 'spine.cfg', content)
     response = client.get(f'{BASE}/configs/spine.cfg')
@@ -230,7 +243,10 @@ def test_serve_config_is_accessible_without_auth(app, client, logged_in_client):
     assert response.data == content
 
 
-def test_serve_script_is_accessible_without_auth(app, client, logged_in_client):
+def test_serve_script_is_accessible_without_auth_or_session(app, client, logged_in_client):
+    """No active_session fixture used here — this is the proof scripts stay
+    ungated (they're fetched via DHCP Option 67 before any serial is known,
+    see beta.md §7)."""
     content = b'import cli\ncli.execute("show version")'
     upload(logged_in_client, 'scripts', 'ztp.py', content)
     response = client.get(f'{BASE}/scripts/ztp.py')
@@ -239,11 +255,27 @@ def test_serve_script_is_accessible_without_auth(app, client, logged_in_client):
 
 
 @pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+])
+def test_serve_returns_403_without_active_session(client, logged_in_client, route, filename):
+    upload(logged_in_client, route, filename)
+    response = client.get(f'{BASE}/{route}/{filename}')
+    assert response.status_code == 403
+    assert response.get_json()['error'] == 'no_active_session'
+
+
+def test_serve_returns_404_for_missing_script(client):
+    response = client.get(f'{BASE}/scripts/nonexistent.py')
+    assert response.status_code == 404
+    assert response.get_json()['error'] == 'file_not_found'
+
+
+@pytest.mark.parametrize('route,filename', [
     ('images',  'nonexistent.bin'),
     ('configs', 'nonexistent.cfg'),
-    ('scripts', 'nonexistent.py'),
 ])
-def test_serve_returns_404_for_missing_file(client, route, filename):
+def test_serve_returns_404_for_missing_file_with_active_session(client, active_session, route, filename):
     response = client.get(f'{BASE}/{route}/{filename}')
     assert response.status_code == 404
     assert response.get_json()['error'] == 'file_not_found'
@@ -255,7 +287,7 @@ def test_serve_returns_404_for_missing_file(client, route, filename):
     '..%2f..%2fmain.py',
     '%2e%2e%2f%2e%2e%2fmain.py',
 ])
-def test_serve_rejects_path_traversal_attempts(client, route, escaped_path):
+def test_serve_rejects_path_traversal_attempts(client, active_session, route, escaped_path):
     """The <path:filename> route converter accepts '/', so a traversal
     attempt reaches this blueprint's own get_file() DB lookup rather than
     falling through route-matching to main.py's SPA catch-all (which would
@@ -307,7 +339,7 @@ def test_delete_removes_file_from_disk(app, logged_in_client):
     assert not os.path.exists(os.path.join(app.config['FILES_PATH'], 'images', 'firmware.bin'))
 
 
-def test_deleted_file_is_no_longer_served(client, logged_in_client):
+def test_deleted_file_is_no_longer_served(client, logged_in_client, active_session):
     upload(logged_in_client, 'images', 'firmware.bin')
     logged_in_client.delete(f'{BASE}/images/firmware.bin')
     response = client.get(f'{BASE}/images/firmware.bin')

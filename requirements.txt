@@ -5,6 +5,7 @@ SQLAlchemy~=2.0
 psycopg[binary]~=3.2
 requests~=2.32
 cryptography~=44.0
+python3-saml~=1.16
 pytest
 gunicorn
 gevent

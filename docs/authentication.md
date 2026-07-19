@@ -13,8 +13,9 @@ network isolation and the serial lookup itself, per the threat model in
 extension like Flask-Security-Too because it has no opinion about *how* a
 user is authenticated — it only tracks who is currently logged in. That
 separation matters here: local logins call `check_password_hash()` against
-`User.password_hash` and then `login_user()`; a future SAML login validates
-the IdP assertion and then calls the same `login_user()`. Passwords are
+`User.password_hash` and then `login_user()`; a SAML login validates the IdP
+assertion (`drawbridge/saml.py`) and then calls the same `login_user()`.
+Passwords are
 hashed with Werkzeug's `generate_password_hash`/`check_password_hash`
 (already a Flask dependency — no new password library needed).
 
@@ -129,17 +130,64 @@ of a false "logged in" response.
 (via `PUT /api/users/<id>`) the last remaining admin is rejected, so the
 system can never end up with zero admins.
 
-## Planned: SAML SP integration
+## Auth backends: local, SAML, and how a future method plugs in
 
-Not implemented yet. When added:
-- `python3-saml` (OneLogin's toolkit) will handle SP metadata, the
-  `AuthnRequest`, and assertion validation — there's no need for a
-  Flask-specific SAML extension on top of Flask-Login.
-- New routes in `drawbridge/api/auth.py`: `GET /saml/metadata` (SP metadata
-  for IdP configuration), `GET /saml/login` (redirect to IdP), `POST
-  /saml/acs` (Assertion Consumer Service — validates the assertion, upserts
-  the `User` row keyed on `saml_issuer`+`saml_subject`, calls `login_user()`).
-- SP certificate/key and IdP metadata will be config, not hardcoded, mounted
-  similarly to how `/app/scripts` is mounted today.
-- `requirements.txt` will pick up `python3-saml` only once this is actually
-  built, not speculatively now.
+Authentication logic is split by *how credentials are shaped*, not lumped
+into the route handlers:
+
+- **Credential-submission methods** (a username+password POSTed to
+  Drawbridge) go through `drawbridge/auth_backends.py`'s
+  `CREDENTIAL_BACKENDS` registry, keyed on `User.auth_source`. `login()`
+  doesn't know a user's `auth_source` until after the DB lookup, so this
+  dict is what makes that dispatch pluggable:
+  ```python
+  backend = CREDENTIAL_BACKENDS.get(user.auth_source) if user else None
+  if not backend or not backend.verify_login(user, password):
+      ...  # 401 — unknown user, wrong password, and "this account uses a
+           # different method" are all indistinguishable to the caller
+  ```
+  `LocalAuthBackend` (checking `password_hash` via `check_password_hash`) is
+  the only entry today. A future LDAP backend (bind against an LDAP server
+  instead of comparing a local hash) registers as `CREDENTIAL_BACKENDS['ldap']`
+  and `login()` itself doesn't change. `claim`/`reset-password`/
+  `change-password` stay local-only *by feature* (a SAML/LDAP account has no
+  local password to claim/reset/change) — they call `LocalAuthBackend`
+  directly rather than through the registry, since they always mean "the
+  local method," never a dynamic dispatch.
+- **SAML** is structurally different — a browser redirect to the IdP and an
+  IdP-POSTed assertion, not a credential submitted to Drawbridge — so it
+  isn't part of `CREDENTIAL_BACKENDS`. It has its own class
+  (`drawbridge/saml.py`'s `SamlAuthBackend`) and its own routes.
+
+Auth-method-specific data stays as flat nullable columns on `User`
+(`password_hash`/`claim_token` for local; `saml_issuer`/`saml_subject` for
+SAML) rather than separate per-method tables — cheap for a small number of
+nullable columns per method, and avoids a join on every login. `auth_source`
+is a plain string, not a DB-level enum, so adding a value for a new method
+needs no migration.
+
+## SAML SP integration
+
+**Status: implemented** (generic SP side — validates assertions from
+whatever IdP the operator configures, no bundled/preferred IdP).
+`python3-saml` (OneLogin's toolkit) handles SP metadata, the `AuthnRequest`,
+and assertion validation; there's no Flask-specific SAML extension needed on
+top of Flask-Login — a successful assertion just calls the same
+`login_user()` a local login does.
+
+Routes, all in `drawbridge/api/auth.py` under a top-level `/saml` prefix
+(not `{API_PREFIX}/auth` — these URLs are registered by hand with the IdP,
+not versioned the way the rest of the API is):
+- `GET /saml/metadata` — SP metadata XML for IdP configuration.
+- `GET /saml/login` — redirects to the IdP's SSO endpoint.
+- `POST /saml/acs` — Assertion Consumer Service. Validates the assertion
+  (`SamlAuthBackend.process_acs`), then `queries.get_or_create_saml_user()`
+  upserts a `User` keyed on `saml_issuer`+`saml_subject` (self-provisioned
+  on first login, defaulting to `role='operator'` — SAML carries no
+  group-to-role mapping in this release), and calls `login_user()`.
+
+All three routes return `404 saml_disabled` unless `SAML_SETTINGS_PATH`
+(default `/app/data/saml`) contains a `settings.json` — see
+[deployment.md](deployment.md), "SAML SSO". SP certificate/key and IdP
+metadata are config, mounted the same way `/app/scripts` is mounted, not
+hardcoded.

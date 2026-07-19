@@ -156,18 +156,46 @@ def test_create_provisioning_session(session):
     assert ps.config_file == 'base.cfg'
 
 
-def test_create_provisioning_session_is_idempotent(session):
+def test_create_provisioning_session_matching_repeat_call_is_idempotent(session):
     queries.add_device(session, serial='SN1')
     queries.create_provisioning_session(session, serial='SN1', mac='aa:bb', ip='10.0.0.1')
     session.commit()
 
-    queries.create_provisioning_session(session, serial='SN1', mac='cc:dd', ip='10.0.0.2')
+    ps = queries.create_provisioning_session(session, serial='SN1', mac='aa:bb', ip='10.0.0.1')
     session.commit()
 
+    assert ps is not None
     sessions = session.query(ProvisioningSession).all()
     assert len(sessions) == 1
-    assert sessions[0].mac == 'cc:dd'
-    assert sessions[0].ip == '10.0.0.2'
+    assert sessions[0].mac == 'aa:bb'
+    assert sessions[0].ip == '10.0.0.1'
+
+
+def test_create_provisioning_session_rejects_mismatched_repeat_call(session):
+    queries.add_device(session, serial='SN1')
+    queries.create_provisioning_session(session, serial='SN1', mac='aa:bb', ip='10.0.0.1')
+    session.commit()
+
+    result = queries.create_provisioning_session(session, serial='SN1', mac='cc:dd', ip='10.0.0.2')
+    session.commit()
+
+    assert result is None
+    sessions = session.query(ProvisioningSession).all()
+    assert len(sessions) == 1
+    assert sessions[0].mac == 'aa:bb'
+    assert sessions[0].ip == '10.0.0.1'
+
+
+def test_create_provisioning_session_fills_in_previously_unknown_mac(session):
+    queries.add_device(session, serial='SN1')
+    queries.create_provisioning_session(session, serial='SN1', ip='10.0.0.1')
+    session.commit()
+
+    ps = queries.create_provisioning_session(session, serial='SN1', mac='aa:bb', ip='10.0.0.1')
+    session.commit()
+
+    assert ps is not None
+    assert ps.mac == 'aa:bb'
 
 
 def test_delete_provisioning_session(session):

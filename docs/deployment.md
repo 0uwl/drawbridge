@@ -168,6 +168,88 @@ Then confirm a `source: 'syslog'` row appears via
 container, `podman logs drawbridge` should show all three s6 services
 (`gunicorn`, `rsyslog`, `log-poller`) start without error.
 
+## SAML SSO
+
+Optional — Drawbridge only enables the `/saml/login`, `/saml/metadata`, and
+`/saml/acs` routes when `SAML_SETTINGS_PATH` points at a directory
+containing a `settings.json` (python3-saml's own settings format: `sp`/`idp`
+blocks with entity IDs, ACS/SSO URLs, and certs). Mount that directory the
+same way `/app/scripts` is mounted; nothing is generated automatically the
+way the self-signed TLS cert is, since SAML needs real coordination with an
+IdP (entity ID and ACS URL registered on their side) — there's no meaningful
+default to fall back to. If no `settings.json` is present, the three routes
+return `404 saml_disabled` and local login is unaffected.
+
+**Configuring it, end to end:**
+
+1. Pick Drawbridge's public URL (`https://drawbridge.example.com`, whatever
+   the operator's actual deployed hostname is — must be reachable by both
+   the admin's browser and the IdP).
+2. Register an SP with your IdP (Okta, Azure AD/Entra, Keycloak, etc.) using:
+   - **Entity ID / Audience URI**: any stable URI you control, e.g.
+     `https://drawbridge.example.com/saml/metadata`.
+   - **ACS URL / Reply URL** (where the IdP POSTs the assertion back):
+     `https://drawbridge.example.com/saml/acs`, binding `HTTP-POST`.
+   The IdP will give you back its own SSO URL, entity ID, and signing
+   certificate — you need all three for the next step. (Some IdPs let you
+   skip this by having Drawbridge serve `GET /saml/metadata` for them to
+   import instead — the routes work either way as long as `settings.json`
+   already exists, so do step 3 first with an empty/dummy `idp` block if
+   your IdP wants to import metadata rather than have you paste values in.)
+3. On the host, create `~/.local/share/drawbridge/saml/settings.json`
+   (or wherever `SAML_SETTINGS_PATH` points):
+   ```json
+   {
+     "strict": true,
+     "sp": {
+       "entityId": "https://drawbridge.example.com/saml/metadata",
+       "assertionConsumerService": {
+         "url": "https://drawbridge.example.com/saml/acs",
+         "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+       },
+       "NameIDFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+       "x509cert": "",
+       "privateKey": ""
+     },
+     "idp": {
+       "entityId": "<from your IdP>",
+       "singleSignOnService": {
+         "url": "<your IdP's SSO URL>",
+         "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+       },
+       "x509cert": "<your IdP's signing certificate, PEM body only>"
+     }
+   }
+   ```
+   `sp.x509cert`/`sp.privateKey` can stay empty unless you also want
+   Drawbridge to sign its outgoing `AuthnRequest`s (most IdPs don't require
+   this for SP-initiated login) — if you do, generate a key pair the same
+   way `tls.py` does and paste the PEM bodies (no `BEGIN/END` lines,
+   `x509cert`/`privateKey` want the base64 body only) in here.
+4. Mount that directory into the container at `SAML_SETTINGS_PATH`
+   (`/app/data/saml` by default) — same pattern as `/app/scripts`:
+   ```ini
+   Volume=%h/.local/share/drawbridge/saml:/app/data/saml:Z
+   ```
+   in the Quadlet unit, or `-v ~/.local/share/drawbridge/saml:/app/data/saml`
+   for a plain `podman run`.
+5. Restart Drawbridge. `curl https://drawbridge.example.com/saml/metadata`
+   should now return SP metadata XML instead of `404 saml_disabled` — a
+   quick way to confirm the mount and JSON are both valid before involving
+   the IdP.
+6. Link an operator to "Log in with SSO" on the login page (already wired
+   to `GET /saml/login`), or send them the IdP's own app link. First
+   successful login self-provisions a Drawbridge account with
+   `role='operator'` — promote it to `admin` afterward via `PUT
+   /api/users/<id>` if needed, since SAML carries no group-to-role mapping
+   in this release.
+
+A first-time SAML login self-provisions a Drawbridge `User` row keyed on the
+assertion's issuer + NameID (`role='operator'` by default — SAML carries no
+group-to-role mapping in this release). See
+[authentication.md](authentication.md) for the auth-backend design this
+plugs into.
+
 ## Development Setup
 
 `./dev.sh` is the normal entry point: it builds `Containerfile.dev` (Python
@@ -236,6 +318,7 @@ podman build -t localhost/drawbridge:latest .
 | `TLS_CERT_PATH` | `/app/data/tls/cert.pem` | Path to Drawbridge's TLS certificate. Self-signed and auto-generated here on first run if nothing exists at this path — mount your own cert to use it instead. See "TLS" above |
 | `TLS_KEY_PATH` | `/app/data/tls/key.pem` | Path to Drawbridge's TLS private key. Same first-run-generation behavior as `TLS_CERT_PATH` |
 | `TLS_DISABLED` | unset (TLS on) | **Local development only** — set to `1` to skip TLS and run plain HTTP. Never set in a deployed/Quadlet config. See "TLS" above |
+| `SAML_SETTINGS_PATH` | `/app/data/saml` | Directory containing python3-saml's `settings.json`. SAML routes are disabled (404) unless a `settings.json` exists there — see "SAML SSO" above |
 
 ### Systemd credentials for the bootstrap admin password
 
