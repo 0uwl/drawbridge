@@ -10,10 +10,6 @@ from drawbridge.utils import error_response, success_response
 
 MIN_PASSWORD_LENGTH = 8
 
-
-# NOTE: URL prefixes are defined and appended to the following routes when this blueprint is registered in main.py.
-#       They should not be defined here
-
 def create_blueprint():
     bp = Blueprint(name='auth', import_name= __name__)
 
@@ -51,19 +47,20 @@ def create_blueprint():
         error = _login_or_error(user)
         if error:
             return error
-        return success_response('Logged in', payload=_user_payload(user))
+        return success_response(f"User {user.username} logged in from {request.remote_addr}", payload=_user_payload(user))
+
 
     @bp.post('/reset-password')
     @limiter.limit('5 per minute')
     def reset_password():
         """Completes a forced password reset for an account whose
         must_reset_password flag is set (currently only the bootstrap admin,
-        when its initial password came from ADMIN_PASSWORD — see
-        docs/authentication.md). Distinct from /change-password: this route
-        is unauthenticated by necessity (login() withholds a session while
-        the flag is set) and only succeeds when the flag is actually set,
-        so it can't be used as a back door around the normal, session-based
-        change-password flow for accounts that don't need a reset."""
+        when its initial password came from ADMIN_PASSWORD). Distinct from 
+        /change-password: this route is unauthenticated by necessity 
+        (login() withholds a session while the flag is set) and only succeeds 
+        when the flag is actually set, so it can't be used as a back door 
+        around the normal, session-based change-password flow for accounts that
+        don't need a reset."""
         data = request.get_json(silent=True) or {}
         username = data.get('username', '').strip()
         current_password = data.get('current_password', '')
@@ -99,7 +96,8 @@ def create_blueprint():
         error = _login_or_error(user)
         if error:
             return error
-        return success_response('Password reset', payload=_user_payload(user))
+        return success_response(f"Password was reset for user {username}", payload=_user_payload(user))
+
 
     @bp.post('/claim')
     @limiter.limit('5 per minute')
@@ -138,7 +136,7 @@ def create_blueprint():
         user.password_hash = generate_password_hash(password, method='scrypt')
         user.claim_token = None
         session.commit()
-        return success_response('Password set')
+        return success_response(f"Password set for user {username}")
 
     @bp.post('/change-password')
     @login_required
@@ -162,18 +160,19 @@ def create_blueprint():
         session = get_session()
         current_user.password_hash = generate_password_hash(new_password, method='scrypt')
         session.commit()
-        return success_response('Password changed')
+        return success_response(f"Password changed for user {current_user.username}")
 
     @bp.post('/logout')
     @login_required
     def logout():
+        username = current_user.username
         logout_user()
-        return success_response('Logged out')
+        return success_response(f"User '{username}' logged out")
 
     @bp.get('/me')
     @login_required
     def me():
-        return success_response('Authenticated', payload=_user_payload(current_user))
+        return success_response(f"User '{current_user.username}' is authenticated ", payload=_user_payload(current_user))
 
     return bp
 
@@ -186,7 +185,7 @@ def _validate_new_password(password: str) -> str | None:
 
 
 def _log_auth_failure(event: str, username: str) -> None:
-    """Non-silent log line for a failed-auth event — username + event type
+    """Non-silent log line for a failed-auth event, username + event type
     only, never the password. The error_response(..., silent=True) calls
     alongside this intentionally skip logging the client-facing message (to
     keep the response generic and avoid username enumeration); this is the

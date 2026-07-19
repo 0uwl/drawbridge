@@ -77,8 +77,8 @@ build:
 whichever user invokes it — there's no dedicated `drawbridge` system user.
 See `quadlet/drawbridge.container` in this repo. [install.sh](../install.sh)
 installs it there automatically for the invoking user (`$SUDO_USER` when run
-via `sudo`), skipping the copy if a unit already exists so a previously-edited
-one is never overwritten.
+via `sudo`); if a unit is already present and differs, it prompts to back up
+the old one before overwriting rather than silently skipping or clobbering it.
 
 Drawbridge is expected to run as a rootless Podman container with the same
 permissions as the invoking user. The data directories used for the
@@ -185,7 +185,7 @@ podman build -t localhost/drawbridge:latest .
 | `DATABASE_PATH` | `/app/data/drawbridge.db` | SQLite database file path, or a full SQLAlchemy URL (e.g. `postgresql+psycopg://user:pass@host/dbname`) to use PostgreSQL instead — see [database.md](database.md) |
 | `WORKERS` | `4` | Number of Gunicorn worker processes. Ignored (forced to `1`) when `DATABASE_PATH` resolves to SQLite — see [database.md](database.md) |
 | `FILES_PATH` | `/app/files` | Root directory for managed files. Subdirectories `images/`, `configs/`, and `scripts/` are created automatically on startup and should each be bind-mounted to the host if granular control is needed |
-| `LOG_LEVEL` | `INFO` | App logger verbosity (`DEBUG`/`INFO`/`WARNING`/`ERROR`). Forced to `DEBUG` under `app.testing` regardless of this value |
+| `LOG_LEVEL` | `INFO` | App logger verbosity (`TRACE`/`DEBUG`/`INFO`/`WARNING`/`ERROR`). `TRACE` is a custom level below `DEBUG` — every successful API response logs its message plus the acting username (or `anonymous`) and remote IP; off by default since it fires on routine reads (list devices, list sessions, etc.), not just writes. Forced to `DEBUG` under `app.testing` regardless of this value |
 | `FLASK_DEBUG` | `0` | Set to `1` in local dev only, never in container |
 | `SECRET_KEY` | none — required | Flask session signing key for Flask-Login; must be set explicitly in every environment |
 | `SQLITE_BUSY_TIMEOUT_MS` | `1000` | Per-connection `PRAGMA busy_timeout` (SQLite only) — see [database.md](database.md) |

@@ -1,3 +1,5 @@
+import logging
+
 from flask import Blueprint, request
 from flask_login import current_user, login_required
 
@@ -31,7 +33,7 @@ def create_blueprint():
         match (request.method):
             case 'GET':
                 session = get_session()
-                return success_response('All users', payload=[_user_dict(u) for u in list_users(session)])
+                return success_response('Returned all users', payload=[_user_dict(u) for u in list_users(session)], level=logging.DEBUG)
             case 'POST':
                 data = request.get_json(silent=True) or {}
                 username = (data.get('username') or '').strip()
@@ -59,7 +61,7 @@ def create_blueprint():
         session = get_session()
         user = get_user_by_id(session, user_id)
         if user is None:
-            return error_response('User not found', 'user_not_found', code=404)
+            return error_response(f"User with ID {user_id} not found", 'user_not_found', code=404)
 
         match (request.method):
             case 'PUT':
@@ -100,11 +102,11 @@ def create_blueprint():
         """Lets an admin force a claimed local account to re-claim a new
         password, without the delete-and-recreate workaround alpha required.
         Reuses the claim-token mechanism (POST /auth/claim), not
-        /auth/reset-password — see docs/authentication.md."""
+        /auth/reset-password - see docs/authentication.md."""
         session = get_session()
         user = get_user_by_id(session, user_id)
         if user is None:
-            return error_response('User not found', 'user_not_found', code=404)
+            return error_response(f"User with ID {user_id} not found", 'user_not_found', code=404)
 
         if user.auth_source != 'local':
             return error_response('Only local accounts can be reset this way', 'invalid_request', code=400)
@@ -112,7 +114,7 @@ def create_blueprint():
         clear_user_password(session, user)
         session.commit()
         return success_response(
-            f'{user.username} must claim a new password',
+            f"User '{user.username}' must claim a new password",
             payload={**_user_dict(user), 'claim_token': user.claim_token},
         )
 
@@ -121,14 +123,14 @@ def create_blueprint():
     def get_log():
         session = get_session()
         entries = list_provisioning_log(session)
-        return success_response('Provisioning log', payload=[e.as_dict() for e in entries])
+        return success_response('Returned provisioning log', payload=[e.as_dict() for e in entries], level=logging.DEBUG)
 
     @bp.get('/settings/log-retention')
     @login_required
     def get_log_retention():
         session = get_session()
         setting = get_setting(session, 'log_retention_days')
-        return success_response('Log retention setting', payload={'log_retention_days': setting.value if setting else None})
+        return success_response('Returned log retention setting', payload={'log_retention_days': setting.value if setting else None}, level=logging.DEBUG)
 
     @bp.put('/settings/log-retention')
     @admin_required

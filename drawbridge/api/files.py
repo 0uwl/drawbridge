@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import tempfile
 
@@ -39,7 +40,7 @@ def _require_auth():
 def _handle_list(file_type: str):
     db_session = get_session()
     files = list_files(db_session, file_type)
-    return success_response(f'All {file_type}s', payload=[f.as_dict() for f in files])
+    return success_response(f"Returned all {file_type}s", payload=[f.as_dict() for f in files], level=logging.DEBUG)
 
 
 def _handle_serve(file_type: str, filename: str):
@@ -106,13 +107,13 @@ def _handle_upload(file_type: str):
         uploaded_by=current_user.username,
     )
     db_session.commit()
-    return success_response(f'{safe_name} uploaded', code=201)
+    return success_response(f"File '{safe_name}' uploaded", code=201)
 
 
 def _handle_delete(file_type: str, filename: str):
     db_session = get_session()
     if not delete_file(db_session, file_type, filename):
-        return error_response(f'{filename} not found', 'file_not_found', code=404)
+        return error_response(f"File '{filename}' not found", 'file_not_found', code=404)
 
     db_session.commit()
 
@@ -120,9 +121,9 @@ def _handle_delete(file_type: str, filename: str):
     try:
         os.unlink(file_path)
     except OSError:
-        current_app.logger.warning(f'DB row deleted for {filename} but disk file missing at {file_path}')
+        current_app.logger.warning(f"DB row deleted for file '{filename}' but disk file missing at {file_path}")
 
-    return success_response(f'{filename} deleted')
+    return success_response(f"File '{filename}' deleted")
 
 
 def create_blueprint():
