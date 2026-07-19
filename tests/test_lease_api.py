@@ -27,7 +27,7 @@ def active_session(app, device):
     with app.app_context():
         session = get_session()
         ps = ProvisioningSession(
-            serial=device.serial, mac=device.mac, ip='192.168.100.15', state='lease_approved',
+            serial=device.serial, mac=device.mac, ip='127.0.0.1', state='lease_approved',
             image=device.image, config_file=device.config_file,
         )
         session.add(ps)
@@ -71,15 +71,67 @@ def test_provision_request_missing_serial_returns_422(client):
     assert response.get_json()['error'] == 'missing_parameter'
 
 
-def test_provision_request_is_idempotent_on_repeat_calls(client, app, device):
+def test_provision_request_rejects_mismatched_mac_on_repeat_call(client, app, device):
     client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
     response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'bb:bb:bb:bb:bb:bb'})
+
+    assert response.status_code == 409
+    assert response.get_json()['error'] == 'session_mismatch'
+
+    with app.app_context():
+        session = get_session().get(ProvisioningSession, device.serial)
+        assert session.mac == 'aa:aa:aa:aa:aa:aa'
+
+
+def test_provision_request_matching_repeat_call_still_succeeds(client, app, device):
+    client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
+    response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
 
     assert response.status_code == 200
 
     with app.app_context():
         session = get_session().get(ProvisioningSession, device.serial)
-        assert session.mac == 'bb:bb:bb:bb:bb:bb'
+        assert session.mac == 'aa:aa:aa:aa:aa:aa'
+
+
+def test_provision_request_rejects_mismatched_ip_on_repeat_call(client, app, device):
+    client.get(
+        f'{BASE}/provision-request', query_string={'serial': device.serial},
+        environ_overrides={'REMOTE_ADDR': '10.0.0.5'},
+    )
+    response = client.get(
+        f'{BASE}/provision-request', query_string={'serial': device.serial},
+        environ_overrides={'REMOTE_ADDR': '10.0.0.9'},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()['error'] == 'session_mismatch'
+
+    with app.app_context():
+        session = get_session().get(ProvisioningSession, device.serial)
+        assert session.ip == '10.0.0.5'
+
+
+def test_provision_request_allows_filling_in_mac_not_previously_provided(client, app, device):
+    client.get(f'{BASE}/provision-request', query_string={'serial': device.serial})
+    response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        session = get_session().get(ProvisioningSession, device.serial)
+        assert session.mac == 'aa:aa:aa:aa:aa:aa'
+
+
+def test_provision_request_omitting_mac_on_repeat_call_is_not_a_mismatch(client, app, device):
+    client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
+    response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial})
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        session = get_session().get(ProvisioningSession, device.serial)
+        assert session.mac == 'aa:aa:aa:aa:aa:aa'
 
 
 # PUT/POST /api/v1/provision-complete
@@ -122,6 +174,19 @@ def test_provision_complete_explicit_image_and_config_override_session_fallback(
         entry = get_session().query(ProvisioningLog).filter_by(serial=active_session.serial).one()
         assert entry.image == 'reported.bin'
         assert entry.config_file == 'reported.cfg'
+
+
+def test_provision_complete_rejects_mismatched_ip(client, app, active_session):
+    response = client.put(
+        f'{BASE}/provision-complete', json={'serial': active_session.serial},
+        environ_overrides={'REMOTE_ADDR': '10.0.0.99'},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()['error'] == 'session_mismatch'
+
+    with app.app_context():
+        assert get_session().get(ProvisioningSession, active_session.serial) is not None
 
 
 def test_provision_complete_unknown_serial_returns_404(client):

@@ -399,7 +399,27 @@ compute SHA-256 of the downloaded file and compare against these values
 before acting on it; mismatch → fail closed (same posture as a 404 denial),
 no completion report sent.
 
-## 7. Pin device-facing requests to serial+MAC+IP, backed by Kea host reservations
+## 7. Pin device-facing requests to serial+MAC+IP, backed by Kea host reservations — ✅ Complete
+
+**Status: implemented**, matching the plan below with one deliberate
+deviation found during implementation planning: no new shared "IP-match"
+helper was added to `queries.py`. Tracing both call sites showed they aren't
+the same query shape — `files.py` has no serial at all, so it reuses the
+existing `find_active_session_by_ip()` as-is; `provision_complete()` already
+holds the fetched row and only needs a one-line `active.ip != request.remote_addr`
+comparison, not a query. A function wrapping one boolean expression with one
+call site would have been the exact speculative machinery this repo avoids
+elsewhere — the DRY goal is still met, just via reuse instead of new code.
+
+`create_provisioning_session()`'s mismatch check only compares `mac`/`ip`
+when both the stored and incoming values are present, so a first call that
+omits a field can have it filled in later, and a later call that omits a
+field isn't treated as a claim to compare — only an actual conflicting value
+rejects (`409 session_mismatch`). The file-serving gate returns
+`403 no_active_session` for images/configs; scripts remain fully ungated.
+See [docs/security-faq.md](docs/security-faq.md) for the updated
+"can someone download/fake" answers.
+
 
 Today, every device-facing route treats each request independently:
 `create_provisioning_session()` ([drawbridge/queries.py:93-113](drawbridge/queries.py#L93))

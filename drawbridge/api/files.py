@@ -8,7 +8,7 @@ from flask_login import current_user
 from werkzeug.utils import secure_filename
 
 from drawbridge.db import get_session
-from drawbridge.queries import add_file, delete_file, get_file, list_files, update_file_hash
+from drawbridge.queries import add_file, delete_file, find_active_session_by_ip, get_file, list_files, update_file_hash
 from drawbridge.utils import allowed_file, error_response, is_valid_sha256, success_response
 
 CHUNK_SIZE = 64 * 1024
@@ -44,8 +44,15 @@ def _handle_list(file_type: str):
 
 
 def _handle_serve(file_type: str, filename: str):
-    """Unauthenticated — devices fetch files over HTTP during ZTP."""
+    """Unauthenticated — devices fetch files over HTTP during ZTP. Images
+    and configs additionally require the caller's IP to match an active
+    ProvisioningSession (beta.md §7); scripts stay ungated since they're
+    fetched via DHCP Option 67 before any serial/session exists."""
     db_session = get_session()
+    if file_type != 'script' and find_active_session_by_ip(db_session, request.remote_addr) is None:
+        return error_response(
+            'No active provisioning session for this request', 'no_active_session', code=403, silent=True,
+        )
     if get_file(db_session, file_type, filename) is None:
         return error_response(f'{filename} not found', 'file_not_found', code=404)
     return send_from_directory(_type_dir(file_type), filename)

@@ -107,17 +107,29 @@ def create_provisioning_session(
     ip: str | None = None,
     image: str | None = None,
     config_file: str | None = None,
-) -> ProvisioningSession:
+) -> ProvisioningSession | None:
     """Idempotent on serial: a device may hit /api/provision-request more
-    than once per boot cycle. Re-approving updates mac/ip/image/config_file
-    rather than raising on the primary-key collision. image/config_file are
-    the device's assigned values (from its Device row) at approval time, not
-    a report of what it actually applied — see ProvisioningSession's
-    docstring."""
+    than once per boot cycle. A repeat call for an existing serial is only
+    honored if it doesn't contradict what's already pinned — mac/ip are
+    only compared when both the stored value and the new value are present,
+    so a call that hasn't learned a field yet can fill it in later, and a
+    call that omits a field isn't treated as a claim to compare (see
+    beta.md §7). Returns None when a repeat call conflicts with the pinned
+    mac or ip; the caller should treat that as a rejection, not an
+    overwrite. image/config_file are the device's assigned values (from its
+    Device row) at approval time, not a report of what it actually applied
+    — see ProvisioningSession's docstring — and are refreshed on every
+    non-conflicting call regardless of mac/ip."""
     ps = session.get(ProvisioningSession, serial)
     if ps is not None:
-        ps.mac = mac
-        ps.ip = ip
+        if ps.mac is not None and mac is not None and ps.mac != mac:
+            return None
+        if ps.ip is not None and ip is not None and ps.ip != ip:
+            return None
+        if mac is not None:
+            ps.mac = mac
+        if ip is not None:
+            ps.ip = ip
         ps.image = image
         ps.config_file = config_file
         return ps

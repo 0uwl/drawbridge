@@ -44,22 +44,27 @@ of Classic ZTP which cannot be prevented at the application layer.
 
 ## Can someone download the actual config/image intended for a device?
 
-**Yes — and this is more serious than the enumeration question above.**
-Once an attacker has a serial's assigned filenames from `provision-request`'s
-response body (`device.as_dict()` in [drawbridge/models.py](../drawbridge/models.py)
-includes `image`, `config_file`, and `script`), the file-serving routes in
-[drawbridge/api/files.py](../drawbridge/api/files.py) —
-`GET /files/configs/<filename>` (line 149), `GET /files/images/<filename>`
-(line 132), `GET /files/scripts/<filename>` (line 166) — serve that file to
-**anyone**, with no session, serial, or IP cross-check. Only `POST`/`DELETE`
-on these routes require authentication; plain `GET` never does, because a
-real device fetching its config has no way to authenticate either.
+**Yes, though it's no longer a cold, unauthenticated fetch for images/configs.**
+`GET /files/images/<filename>` and `GET /files/configs/<filename>` in
+[drawbridge/api/files.py](../drawbridge/api/files.py) now require the
+caller's IP to match an active `ProvisioningSession` — a third party who has
+never called `provision-request` gets a `403 no_active_session`. But
+`provision-request` itself is still open (see the enumeration question
+above), so an attacker who knows a serial can call it themselves from their
+own IP, then immediately pull the image/config from that same IP — this
+closes the "cold fetch by anyone, no session at all" gap and the
+first-claim-wins race it made worse, but it doesn't close the race itself
+(see [beta.md](../beta.md) §7). `GET /files/scripts/<filename>` stays
+unauthenticated and session-less on purpose — the generic ZTP script is
+fetched via DHCP Option 67 before any serial is known, so gating it isn't
+possible without breaking the boot bootstrap itself; this is fine since it
+carries nothing device- or config-specific.
 
-This means the actual startup-config content is exposed, not just its
-existence. If a device relies on `DEFAULT_CONFIG_FILE` (no device-specific
-config assigned), one successful pull exposes the fleet-wide baseline config
-shared by every device using the default — worse than a single device's
-leak.
+This means the actual startup-config content is still exposed to whoever
+wins that race, not just its existence. If a device relies on
+`DEFAULT_CONFIG_FILE` (no device-specific config assigned), one successful
+pull exposes the fleet-wide baseline config shared by every device using the
+default — worse than a single device's leak.
 
 **Mitigation:** treat every file uploaded through Drawbridge's config/image
 management as reachable by anyone who can reach the network, full stop.
@@ -71,21 +76,24 @@ non-negotiable in practice.
 
 ## Can someone fake a provisioning result or mess with the audit log?
 
-**Yes.** `POST/PUT /api/v1/provision-complete` ([drawbridge/api/leases.py](../drawbridge/api/leases.py),
-line 39) only requires that *some* `ProvisioningSession` exist for the
-serial — which the attacker can create themselves via `provision-request`.
-From there, `event`, `detail`, `image`, and `config_file` are all
-attacker-supplied and written directly into the permanent `ProvisioningLog`.
-An attacker can mark a device "successfully provisioned" when it never was,
-or plant a misleading failure `detail` to send operators chasing a phantom
-problem. The `mac` parameter recorded alongside all of this is explicitly
-"audit/logging only, not used for lookup," so it's not a trustworthy
-forensic signal either — don't rely on it to identify who did this after
-the fact.
+**Yes.** `POST/PUT /api/v1/provision-complete` ([drawbridge/api/leases.py](../drawbridge/api/leases.py))
+requires an active `ProvisioningSession` for the serial *and* a matching
+caller IP (a `409 session_mismatch` otherwise) — but an attacker can satisfy
+both by calling `provision-request` themselves first, from the same IP
+they'll complete from. From there, `event`, `detail`, `image`, and
+`config_file` are all attacker-supplied and written directly into the
+permanent `ProvisioningLog`. An attacker can mark a device "successfully
+provisioned" when it never was, or plant a misleading failure `detail` to
+send operators chasing a phantom problem. `mac` is now pinned and compared
+on repeat `provision-request` calls for the same serial (a mismatched claim
+is rejected), but it's still self-reported by whoever calls the endpoint
+first, so it's not a trustworthy forensic signal for *who* did this — don't
+rely on it to identify an attacker after the fact.
 
 This call also deletes the `ProvisioningSession` — so firing it while a real
 device is mid-provisioning terminates that device's session early, and its
-genuine completion report later gets a `404 device_not_active`.
+genuine completion report later gets a `404 device_not_active` (or, if the
+attacker's IP doesn't match the real device's, a `409 session_mismatch`).
 
 **Mitigation:** none available at the application layer today (see
 [beta.md](../beta.md) for tracked improvements — rate limiting and
