@@ -3,7 +3,7 @@ from werkzeug.security import check_password_hash
 from drawbridge.db import get_session
 from drawbridge.models import User
 
-from tests.conftest import PASSWORD
+from tests.conftest import CLAIM_TOKEN, PASSWORD
 
 BASE = '/api/v1'
 
@@ -74,6 +74,18 @@ def test_login_updates_last_login_at(app, client, user):
         assert updated.last_login_at is not None
 
 
+def test_login_returns_403_when_account_is_inactive(client, inactive_user):
+    response = client.post(f'{BASE}/auth/login', json={'username': inactive_user.username, 'password': PASSWORD})
+    assert response.status_code == 403
+    assert response.get_json()['error'] == 'account_inactive'
+
+
+def test_login_failure_logs_username_not_password(client, user, caplog):
+    client.post(f'{BASE}/auth/login', json={'username': user.username, 'password': 'wrong'})
+    assert any(user.username in record.message for record in caplog.records)
+    assert not any('wrong' in record.message for record in caplog.records)
+
+
 # POST /api/v1/auth/logout
 
 def test_logout_returns_200_when_logged_in(logged_in_client):
@@ -110,38 +122,72 @@ def test_me_returns_401_when_not_logged_in(client):
 # POST /api/v1/auth/claim
 
 def test_claim_sets_password_on_unclaimed_local_account(app, client, unclaimed_user):
-    response = client.post(f'{BASE}/auth/claim', json={'username': unclaimed_user.username, 'password': 'new-pass-123'})
+    response = client.post(f'{BASE}/auth/claim', json={
+        'username': unclaimed_user.username, 'password': 'new-pass-123', 'token': CLAIM_TOKEN,
+    })
     assert response.status_code == 200
     with app.app_context():
         updated = get_session().get(User, unclaimed_user.id)
         assert updated.password_hash is not None
         assert check_password_hash(updated.password_hash, 'new-pass-123')
+        assert updated.password_hash.startswith('scrypt:')
+
+
+def test_claim_nulls_token_on_success(app, client, unclaimed_user):
+    client.post(f'{BASE}/auth/claim', json={
+        'username': unclaimed_user.username, 'password': 'new-pass-123', 'token': CLAIM_TOKEN,
+    })
+    with app.app_context():
+        updated = get_session().get(User, unclaimed_user.id)
+        assert updated.claim_token is None
 
 
 def test_claim_allows_login_afterwards(client, unclaimed_user):
-    client.post(f'{BASE}/auth/claim', json={'username': unclaimed_user.username, 'password': 'new-pass-123'})
+    client.post(f'{BASE}/auth/claim', json={
+        'username': unclaimed_user.username, 'password': 'new-pass-123', 'token': CLAIM_TOKEN,
+    })
     response = client.post(f'{BASE}/auth/login', json={'username': unclaimed_user.username, 'password': 'new-pass-123'})
     assert response.status_code == 200
 
 
 def test_claim_returns_400_when_already_claimed(client, user):
-    response = client.post(f'{BASE}/auth/claim', json={'username': user.username, 'password': 'whatever'})
+    response = client.post(f'{BASE}/auth/claim', json={'username': user.username, 'password': 'whatever-123', 'token': 'x'})
     assert response.status_code == 400
 
 
 def test_claim_returns_400_for_saml_only_account(client, saml_user):
-    response = client.post(f'{BASE}/auth/claim', json={'username': saml_user.username, 'password': 'whatever'})
+    response = client.post(f'{BASE}/auth/claim', json={'username': saml_user.username, 'password': 'whatever-123', 'token': 'x'})
     assert response.status_code == 400
 
 
 def test_claim_returns_400_for_unknown_username(client):
-    response = client.post(f'{BASE}/auth/claim', json={'username': 'nobody', 'password': 'whatever'})
+    response = client.post(f'{BASE}/auth/claim', json={'username': 'nobody', 'password': 'whatever-123', 'token': 'x'})
     assert response.status_code == 400
 
 
 def test_claim_returns_400_when_password_missing(client, unclaimed_user):
-    response = client.post(f'{BASE}/auth/claim', json={'username': unclaimed_user.username})
+    response = client.post(f'{BASE}/auth/claim', json={'username': unclaimed_user.username, 'token': CLAIM_TOKEN})
     assert response.status_code == 400
+
+
+def test_claim_returns_400_when_token_missing(client, unclaimed_user):
+    response = client.post(f'{BASE}/auth/claim', json={'username': unclaimed_user.username, 'password': 'new-pass-123'})
+    assert response.status_code == 400
+
+
+def test_claim_returns_400_with_wrong_token(client, unclaimed_user):
+    response = client.post(f'{BASE}/auth/claim', json={
+        'username': unclaimed_user.username, 'password': 'new-pass-123', 'token': 'wrong-token',
+    })
+    assert response.status_code == 400
+
+
+def test_claim_returns_400_for_short_password(client, unclaimed_user):
+    response = client.post(f'{BASE}/auth/claim', json={
+        'username': unclaimed_user.username, 'password': 'short', 'token': CLAIM_TOKEN,
+    })
+    assert response.status_code == 400
+    assert response.get_json()['error'] == 'weak_password'
 
 
 # POST /api/v1/auth/reset-password
@@ -201,6 +247,31 @@ def test_reset_password_returns_400_when_new_password_missing(must_reset_user, c
     assert response.status_code == 400
 
 
+def test_reset_password_returns_400_for_short_new_password(must_reset_user, client):
+    response = client.post(f'{BASE}/auth/reset-password', json={
+        'username': must_reset_user.username,
+        'current_password': PASSWORD,
+        'new_password': 'short',
+    })
+    assert response.status_code == 400
+    assert response.get_json()['error'] == 'weak_password'
+
+
+def test_reset_password_returns_403_when_account_is_inactive(app, client, inactive_user):
+    with app.app_context():
+        updated = get_session().get(User, inactive_user.id)
+        updated.must_reset_password = True
+        get_session().commit()
+
+    response = client.post(f'{BASE}/auth/reset-password', json={
+        'username': inactive_user.username,
+        'current_password': PASSWORD,
+        'new_password': 'new-pass-123',
+    })
+    assert response.status_code == 403
+    assert response.get_json()['error'] == 'account_inactive'
+
+
 def test_reset_password_allows_subsequent_login(client, must_reset_user):
     client.post(f'{BASE}/auth/reset-password', json={
         'username': must_reset_user.username,
@@ -237,6 +308,12 @@ def test_change_password_returns_400_with_wrong_current_password(logged_in_clien
 def test_change_password_returns_400_when_new_password_missing(logged_in_client):
     response = logged_in_client.post(f'{BASE}/auth/change-password', json={'current_password': PASSWORD})
     assert response.status_code == 400
+
+
+def test_change_password_returns_400_for_short_new_password(logged_in_client):
+    response = logged_in_client.post(f'{BASE}/auth/change-password', json={'current_password': PASSWORD, 'new_password': 'short'})
+    assert response.status_code == 400
+    assert response.get_json()['error'] == 'weak_password'
 
 
 def test_new_password_works_for_subsequent_login(client, logged_in_client, user):

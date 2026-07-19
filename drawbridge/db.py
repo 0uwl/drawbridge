@@ -236,7 +236,7 @@ def _bootstrap_admin(session, app):
         username=ADMIN_USERNAME,
         role='admin',
         auth_source='local',
-        password_hash=generate_password_hash(password),
+        password_hash=generate_password_hash(password, method='scrypt'),
         must_reset_password=must_reset,
     ))
 

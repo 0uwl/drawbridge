@@ -1,6 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
+declare module 'vue-router' {
+  interface RouteMeta {
+    requiresAuth?: boolean
+  }
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -28,6 +34,12 @@ const router = createRouter({
       path: '/log',
       name: 'log',
       component: () => import('../views/Log.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/device-logs',
+      name: 'device-logs',
+      component: () => import('../views/DeviceLogs.vue'),
       meta: { requiresAuth: true },
     },
     {

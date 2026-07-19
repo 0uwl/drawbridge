@@ -100,6 +100,30 @@ class ProvisioningLog(Base):
         }
 
 
+class DeviceLogEntry(Base):
+    """Live log feed from ZTP devices during provisioning — both the
+    script's own structured events (source='script') and raw syslog
+    forwarded by the device (source='syslog'). Unrelated to ProvisioningLog
+    (that's a provisioning-outcome audit trail); this is a raw log stream.
+    Subject to the same retention policy as ProvisioningLog."""
+    __tablename__ = 'device_logs'
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    serial: Mapped[str | None]  # nullable — syslog may arrive before a serial is matched
+    source: Mapped[str]         # 'script' | 'syslog'
+    message: Mapped[str]
+    timestamp: Mapped[str] = mapped_column(default=utcnow_iso)
+
+    def as_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'serial': self.serial,
+            'source': self.source,
+            'message': self.message,
+            'timestamp': self.timestamp,
+        }
+
+
 class Setting(Base):
     """Small admin-configurable key/value store. First row of interest:
     key='log_retention_days', value='30' (or 'indefinite')."""
@@ -139,6 +163,7 @@ class User(Base, UserMixin):
     username: Mapped[str] = mapped_column(unique=True)
     email: Mapped[str | None]
     password_hash: Mapped[str | None]   # null for SAML-only operators
+    claim_token: Mapped[str | None]     # single-use token gating POST /auth/claim, nulled once claimed
     role: Mapped[str]                   # 'admin' or 'operator'
     auth_source: Mapped[str]            # 'local' or 'saml'
     saml_issuer: Mapped[str | None]     # IdP entity ID, set once SAML lands

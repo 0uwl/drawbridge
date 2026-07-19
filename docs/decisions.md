@@ -143,15 +143,38 @@
   Python scripts running on the C9200CX are entirely isolated from the device's
   own network stack; direct socket calls from the ZTP script fail. The
   workaround is to write the JSON payload to the device filesystem and issue
-  `copy flash:status.json http://<drawbridge>/api/provision-complete` from IOS
+  `copy flash:status.json https://<drawbridge>/api/provision-complete` from IOS
   XE CLI (via `cli.execute()` in the script). IOS XE's `copy` command issues a
   PUT request, so the endpoint accepts PUT as its primary method. POST is also
   accepted for development and testing. The `Content-Type` header is not
   guaranteed to be set by `copy`, so the endpoint parses the body regardless of
   content type (`force=True`). This constraint applies to all network I/O in the
   ZTP script on C9200CX — image and config downloads must similarly be triggered
-  via `cli.execute("copy http://... flash:")` rather than Python's `urllib` or
+  via `cli.execute("copy https://... flash:")` rather than Python's `urllib` or
   `requests`.
+
+  **Addendum — HTTPS cert trust on C9200CX (beta section 3).** IOS XE's
+  HTTPS client does not silently accept an unverifiable certificate: without
+  a pre-authenticated trustpoint, `copy https://...` either blocks on an
+  interactive accept/reject prompt (nothing to answer it — Guestshell's
+  `cli.execute()` isn't a TTY) or fails outright. `scripts/ztp-base.py`
+  therefore imports `DRAWBRIDGE_CA_CERT_PEM` into a trustpoint via
+  `crypto pki authenticate` (`_ensure_c9200cx_trustpoint()`) before its first
+  `copy https://` call. A self-signed cert is a valid trust anchor on its
+  own for this purpose — no real CA hierarchy is required, `crypto pki
+  authenticate` just needs to be pointed at whatever cert Drawbridge is
+  actually serving. **Open risk, not resolved by this implementation:** the
+  very first fetch — the ZTP script itself, via DHCP Option 67
+  `boot-file-name` — happens before any script code runs, so there's no
+  opportunity to import a trustpoint ahead of it. Cisco's Classic ZTP
+  documentation describes this fetch with no certificate-validation step at
+  all (unlike "Secure ZTP," a different, SUDI-based Cisco mechanism this
+  project deliberately doesn't use — see "No sZTP" above). Whether the boot
+  agent even honors `https://` in `boot-file-name` the way this assumes, and
+  what it does with an unverifiable cert on that first fetch, is unconfirmed
+  without lab hardware — same posture as other C9200CX-dependent behavior in
+  this file: documented as manually verified, not something this diff can
+  close out.
 
 - **`files.py`'s file-serving routes use `<path:filename>`, not
   `<string:filename>`.** `<string:...>` excludes `/` from what it matches, so

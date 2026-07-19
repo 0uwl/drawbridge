@@ -5,8 +5,9 @@ from pathlib import Path
 
 from flask import Flask, jsonify, send_from_directory
 
-from drawbridge.auth import init_login_manager
+from drawbridge.auth import init_login_manager, limiter
 from drawbridge.db import init_db
+from drawbridge.utils import error_response
 
 API_VERSION=1
 API_PREFIX=f'/api/v{API_VERSION}'
@@ -20,6 +21,9 @@ DEFAULT_CONFIG_FILE = None
 DEFAULT_SCRIPT = None
 ADMIN_PASSWORD = None
 CREDENTIALS_DIRECTORY = None
+TLS_CERT_PATH = '/app/data/tls/cert.pem'
+TLS_KEY_PATH = '/app/data/tls/key.pem'
+SAML_SETTINGS_PATH = '/app/data/saml'
 
 # Built Vue SPA (frontend/, baked in at image build time — see
 # docs/frontend.md). static_folder is disabled below so Flask doesn't
@@ -47,12 +51,26 @@ def create_app(config_dict: dict = {}):
     app.config['ADMIN_PASSWORD'] = os.getenv('ADMIN_PASSWORD', ADMIN_PASSWORD)
     app.config['CREDENTIALS_DIRECTORY'] = os.getenv('CREDENTIALS_DIRECTORY', CREDENTIALS_DIRECTORY)
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')  # no default — see check below
+    app.config['TLS_DISABLED'] = bool(os.getenv('TLS_DISABLED'))
+    app.config['SAML_SETTINGS_PATH'] = os.getenv('SAML_SETTINGS_PATH', SAML_SETTINGS_PATH)
 
     if config_dict:
         app.config.update(config_dict)
 
     if app.testing:
         app.config['LOG_LEVEL'] = 'DEBUG'
+
+    # Beta section 3 makes Drawbridge terminate its own TLS by default (see
+    # drawbridge/gunicorn.conf.py), so there's no longer an "unencrypted
+    # Drawbridge" deployment mode to gate against — except TLS_DISABLED,
+    # the local-dev escape hatch, where SESSION_COOKIE_SECURE would silently
+    # drop the session cookie over plain HTTP instead.
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_SECURE'] = not app.testing and not app.config['TLS_DISABLED']
+
+    # Off by default under testing so existing tests don't hit 429s; a
+    # rate-limiting test can override this explicitly via config_dict.
+    app.config.setdefault('RATELIMIT_ENABLED', not app.testing)
 
     if app.config['SECRET_KEY'] is None:
         if app.testing:
@@ -80,9 +98,14 @@ def create_app(config_dict: dict = {}):
         return jsonify({'status': 'healthy'}), 200
 
     from drawbridge.api import auth
+    from drawbridge.saml import SamlAuthBackend
     app.register_blueprint(auth.create_blueprint(), url_prefix=f'{API_PREFIX}/auth')
     app.logger.debug("Registered Blueprint 'auth.py'")
-    
+
+    saml_backend = SamlAuthBackend(app.config['SAML_SETTINGS_PATH'])
+    app.register_blueprint(auth.create_saml_blueprint(saml_backend), url_prefix='/saml')
+    app.logger.debug("Registered Blueprint 'saml'")
+
     from drawbridge.api import devices
     app.register_blueprint(devices.create_blueprint(), url_prefix=f'{API_PREFIX}/devices')
     app.logger.debug("Registered Blueprint 'devices.py'")
@@ -99,10 +122,19 @@ def create_app(config_dict: dict = {}):
     app.register_blueprint(settings.create_blueprint(), url_prefix=API_PREFIX)
     app.logger.debug("Registered Blueprint 'settings.py'")
 
+    from drawbridge.api import device_logs
+    app.register_blueprint(device_logs.create_blueprint(), url_prefix=API_PREFIX)
+    app.logger.debug("Registered Blueprint 'device_logs.py'")
+
     for subdir in ('images', 'configs', 'scripts'):
         os.makedirs(os.path.join(app.config['FILES_PATH'], subdir), exist_ok=True)
 
     init_login_manager(app)
+    limiter.init_app(app)
+
+    @app.errorhandler(429)
+    def _rate_limited(e):
+        return error_response('Too many requests', 'rate_limited', code=429)
 
     with app.app_context():
         init_db(app)

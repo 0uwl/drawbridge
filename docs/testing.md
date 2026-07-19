@@ -6,8 +6,7 @@ a running Kea instance — the provisioning gate lives in
 routes, which have no Kea dependency at all (no hook, no Control Agent
 calls), so no mocking of anything Kea-related is needed.
 
-The SQLite database for tests uses a temporary file via a `tmp_path` fixture,
-never the production `/srv/drawbridge/data/drawbridge.db`.
+The SQLite database for tests uses a temporary file via a `tmp_path` fixture
 
 Key test cases to cover:
 - `GET /api/provision-request` with known serial → 200
@@ -36,6 +35,10 @@ rather than failing the run — see that directory's README.
 run in the default suite — see `tests/kea-integration/README.md` for the
 separate, opt-in, container-based tiers that require a real Kea process
 and are not part of `pytest`.
+
+`tests/browser-integration/` is a similar opt-in, non-`pytest` tier for
+frontend behavior that only shows up in a real browser (e.g. whether a
+failed login actually renders an error message) — see its README.
 
 Run with:
 ```bash

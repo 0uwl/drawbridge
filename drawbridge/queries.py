@@ -7,12 +7,13 @@ that needs several of these in one transaction (e.g. /api/provision-request
 checking a device then creating a ProvisioningSession row) can do so
 atomically.
 """
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from drawbridge.models import Device, ProvisioningSession, ProvisioningLog, Setting, User, ZTPFile, utcnow_iso
+from drawbridge.models import Device, DeviceLogEntry, ProvisioningSession, ProvisioningLog, Setting, User, ZTPFile, utcnow_iso
 
 # Device queries
 
@@ -90,6 +91,14 @@ def get_provisioning_session(session: Session, serial: str) -> ProvisioningSessi
     return session.get(ProvisioningSession, serial)
 
 
+def find_active_session_by_ip(session: Session, ip: str) -> ProvisioningSession | None:
+    """Best-effort match of a syslog line's source IP to the ProvisioningSession
+    that pinned it (see beta.md §7's pin-on-first-use model). The in-flight
+    session table is small (a handful of concurrent ZTP runs at most), so a
+    linear scan needs no new index."""
+    return session.scalar(select(ProvisioningSession).where(ProvisioningSession.ip == ip))
+
+
 def create_provisioning_session(
     session: Session,
     *,
@@ -98,17 +107,29 @@ def create_provisioning_session(
     ip: str | None = None,
     image: str | None = None,
     config_file: str | None = None,
-) -> ProvisioningSession:
+) -> ProvisioningSession | None:
     """Idempotent on serial: a device may hit /api/provision-request more
-    than once per boot cycle. Re-approving updates mac/ip/image/config_file
-    rather than raising on the primary-key collision. image/config_file are
-    the device's assigned values (from its Device row) at approval time, not
-    a report of what it actually applied — see ProvisioningSession's
-    docstring."""
+    than once per boot cycle. A repeat call for an existing serial is only
+    honored if it doesn't contradict what's already pinned — mac/ip are
+    only compared when both the stored value and the new value are present,
+    so a call that hasn't learned a field yet can fill it in later, and a
+    call that omits a field isn't treated as a claim to compare (see
+    beta.md §7). Returns None when a repeat call conflicts with the pinned
+    mac or ip; the caller should treat that as a rejection, not an
+    overwrite. image/config_file are the device's assigned values (from its
+    Device row) at approval time, not a report of what it actually applied
+    — see ProvisioningSession's docstring — and are refreshed on every
+    non-conflicting call regardless of mac/ip."""
     ps = session.get(ProvisioningSession, serial)
     if ps is not None:
-        ps.mac = mac
-        ps.ip = ip
+        if ps.mac is not None and mac is not None and ps.mac != mac:
+            return None
+        if ps.ip is not None and ip is not None and ps.ip != ip:
+            return None
+        if mac is not None:
+            ps.mac = mac
+        if ip is not None:
+            ps.ip = ip
         ps.image = image
         ps.config_file = config_file
         return ps
@@ -147,9 +168,39 @@ def count_admins(session: Session) -> int:
 
 def create_user(session: Session, *, username: str, role: str) -> User:
     """Admin-created account: no password set yet — password_hash stays NULL
-    until the user claims it via POST /api/auth/claim (see
-    docs/authentication.md)."""
-    user = User(username=username, role=role, auth_source='local')
+    until the user claims it via POST /api/auth/claim, using the claim_token
+    generated here (see docs/authentication.md)."""
+    user = User(username=username, role=role, auth_source='local', claim_token=secrets.token_urlsafe(32))
+    session.add(user)
+    return user
+
+
+def get_or_create_saml_user(
+    session: Session, *, issuer: str, subject: str, attributes: dict | None = None, role: str = 'operator',
+) -> User:
+    """Upserts a User keyed on (saml_issuer, saml_subject) — the IdP-issued
+    identity, not username, since SAML accounts self-provision on first
+    assertion instead of being admin-created like local ones. New accounts
+    default to 'operator'; SAML carries no group-to-role mapping (out of
+    scope — see beta.md section 4, "generic SP side only")."""
+    user = session.scalar(select(User).where(User.saml_issuer == issuer, User.saml_subject == subject))
+    if user is not None:
+        return user
+
+    email = None
+    if attributes:
+        values = attributes.get('email') or attributes.get('emailAddress')
+        if values:
+            email = values[0]
+
+    user = User(
+        username=f'saml:{subject}',
+        email=email,
+        role=role,
+        auth_source='saml',
+        saml_issuer=issuer,
+        saml_subject=subject,
+    )
     session.add(user)
     return user
 
@@ -162,6 +213,16 @@ def delete_user(session: Session, user_id: int) -> User | None:
         return None
     session.delete(user)
     return user
+
+
+def clear_user_password(session: Session, user: User) -> None:
+    """Admin-triggered reset: nulls password_hash and issues a fresh
+    claim_token so the account re-enters the same POST /auth/claim flow as a
+    newly-created account. Does not call /auth/reset-password's logic —
+    that route requires checking a current_password against password_hash,
+    which is impossible once the hash is nulled."""
+    user.password_hash = None
+    user.claim_token = secrets.token_urlsafe(32)
 
 
 # Setting queries
@@ -248,6 +309,14 @@ def delete_file(session: Session, file_type: str, filename: str) -> bool:
     return True
 
 
+def update_file_hash(session: Session, file_type: str, filename: str, sha256: str) -> ZTPFile | None:
+    f = session.get(ZTPFile, (file_type, filename))
+    if f is None:
+        return None
+    f.sha256 = sha256
+    return f
+
+
 def list_provisioning_log(session: Session) -> list[ProvisioningLog]:
     """Rows already reflect the retention window — add_log_entry purges
     expired rows lazily on insert (see docs/database.md), so this just
@@ -264,3 +333,41 @@ def purge_expired_logs(session: Session, retention_days: str) -> None:
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=int(retention_days))).isoformat(timespec='microseconds')
     session.execute(delete(ProvisioningLog).where(ProvisioningLog.timestamp < cutoff))
+
+
+# DeviceLogEntry queries
+
+def add_device_log_entry(
+    session: Session,
+    *,
+    serial: str | None = None,
+    source: str,
+    message: str,
+) -> DeviceLogEntry:
+    """Writes one DeviceLogEntry row, purging expired rows first per the
+    same lazy-retention policy add_log_entry uses (shared log_retention_days
+    setting — see docs/database.md)."""
+    retention = get_setting(session, 'log_retention_days')
+    if retention is not None:
+        purge_expired_device_logs(session, retention.value)
+
+    entry = DeviceLogEntry(serial=serial, source=source, message=message)
+    session.add(entry)
+    return entry
+
+
+def list_device_logs(session: Session, serial: str | None = None) -> list[DeviceLogEntry]:
+    stmt = select(DeviceLogEntry).order_by(DeviceLogEntry.timestamp.desc())
+    if serial is not None:
+        stmt = stmt.where(DeviceLogEntry.serial == serial)
+    return list(session.scalars(stmt).all())
+
+
+def purge_expired_device_logs(session: Session, retention_days: str) -> None:
+    """Deletes DeviceLogEntry rows older than retention_days. A no-op when
+    retention is the literal string 'indefinite' (see purge_expired_logs)."""
+    if retention_days == 'indefinite':
+        return
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=int(retention_days))).isoformat(timespec='microseconds')
+    session.execute(delete(DeviceLogEntry).where(DeviceLogEntry.timestamp < cutoff))

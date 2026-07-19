@@ -1,5 +1,7 @@
 from functools import wraps
 
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask_login import LoginManager, current_user, login_required
 
 from drawbridge.db import get_session
@@ -7,6 +9,12 @@ from drawbridge.queries import get_user_by_id
 from drawbridge.utils import error_response
 
 login_manager = LoginManager()
+
+# Per-IP, in-memory rate limiting on the password-entry routes (see auth.py).
+# In-memory storage is per-worker, not global — under multiple Gunicorn
+# workers a determined attacker gets WORKERS x the nominal limit.
+# ponytail: per-worker limiter, shared storage if multi-worker rate limiting matters
+limiter = Limiter(key_func=get_remote_address, storage_uri='memory://')
 
 
 def admin_required(f):

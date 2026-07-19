@@ -1,11 +1,20 @@
 import { defineStore } from 'pinia'
 import filesClient from '../api/filesClient'
 import { TYPE_PLURAL } from '../utils/fileTypes'
+import type { FileType, QueueItem, StagedFile, ZTPFile } from '../types'
 
 const CONCURRENCY = 3
 
+interface FilesState {
+  items: ZTPFile[]
+  queue: QueueItem[]
+  loading: boolean
+  error: string | null
+  _draining: boolean
+}
+
 export const useFilesStore = defineStore('files', {
-  state: () => ({
+  state: (): FilesState => ({
     items: [],
     queue: [],
     loading: false,
@@ -13,24 +22,24 @@ export const useFilesStore = defineStore('files', {
     _draining: false,
   }),
   actions: {
-    async list() {
+    async list(): Promise<boolean> {
       this.loading = true
       this.error = null
       try {
         const lists = await Promise.all(
-          Object.values(TYPE_PLURAL).map((plural) => filesClient.get(`/${plural}`)),
+          Object.values(TYPE_PLURAL).map((plural) => filesClient.get<ZTPFile[]>(`/${plural}`)),
         )
         this.items = lists.flat().sort((a, b) => (a.uploaded_at < b.uploaded_at ? 1 : -1))
         return true
       } catch (err) {
-        this.error = err.message
+        this.error = (err as Error).message
         return false
       } finally {
         this.loading = false
       }
     },
 
-    async remove(fileType, filename) {
+    async remove(fileType: FileType, filename: string): Promise<boolean> {
       this.loading = true
       this.error = null
       try {
@@ -38,22 +47,22 @@ export const useFilesStore = defineStore('files', {
         await this.list()
         return true
       } catch (err) {
-        this.error = err.message
+        this.error = (err as Error).message
         return false
       } finally {
         this.loading = false
       }
     },
 
-    // `files` is [{ file: File, fileType }, ...] — already filtered to
-    // known types by the caller.
-    enqueueAndStart(files) {
-      for (const { file, fileType } of files) {
+    // `files` is already filtered to known types by the caller.
+    enqueueAndStart(files: StagedFile[]): void {
+      for (const { file, fileType, sha256 } of files) {
         this.queue.push({
           id: crypto.randomUUID(),
           file,
           fileType,
           filename: file.name,
+          sha256,
           status: 'queued',
           progress: 0,
           controller: null,
@@ -63,7 +72,22 @@ export const useFilesStore = defineStore('files', {
       this._drainQueue()
     },
 
-    cancelUpload(id) {
+    async updateHash(fileType: FileType, filename: string, sha256: string): Promise<boolean> {
+      this.loading = true
+      this.error = null
+      try {
+        await filesClient.put(`/${TYPE_PLURAL[fileType]}/${filename}`, { sha256 })
+        await this.list()
+        return true
+      } catch (err) {
+        this.error = (err as Error).message
+        return false
+      } finally {
+        this.loading = false
+      }
+    },
+
+    cancelUpload(id: string): void {
       const item = this.queue.find((i) => i.id === id)
       if (!item) return
       if (item.status === 'uploading') {
@@ -73,11 +97,11 @@ export const useFilesStore = defineStore('files', {
       }
     },
 
-    clearFinished() {
+    clearFinished(): void {
       this.queue = this.queue.filter((i) => i.status === 'queued' || i.status === 'uploading')
     },
 
-    async _drainQueue() {
+    async _drainQueue(): Promise<void> {
       if (this._draining) return
       this._draining = true
       while (this.queue.some((i) => i.status === 'queued')) {
@@ -88,7 +112,7 @@ export const useFilesStore = defineStore('files', {
       await this.list()
     },
 
-    async _runWorker() {
+    async _runWorker(): Promise<void> {
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const item = this.queue.find((i) => i.status === 'queued')
@@ -97,14 +121,16 @@ export const useFilesStore = defineStore('files', {
       }
     },
 
-    async _uploadItem(item) {
+    async _uploadItem(item: QueueItem): Promise<void> {
       item.status = 'uploading'
       item.controller = new AbortController()
+      const controller = item.controller
       const formData = new FormData()
       formData.append('file', item.file)
+      if (item.sha256) formData.append('sha256', item.sha256)
       try {
         await filesClient.post(`/${TYPE_PLURAL[item.fileType]}`, formData, {
-          signal: item.controller.signal,
+          signal: controller.signal,
           onUploadProgress: (evt) => {
             if (evt.total) item.progress = Math.round((evt.loaded / evt.total) * 100)
           },
@@ -112,11 +138,11 @@ export const useFilesStore = defineStore('files', {
         item.status = 'done'
         item.progress = 100
       } catch (err) {
-        if (item.controller.signal.aborted) {
+        if (controller.signal.aborted) {
           item.status = 'canceled'
         } else {
           item.status = 'error'
-          item.error = err.message
+          item.error = (err as Error).message
         }
       }
     },

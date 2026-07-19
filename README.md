@@ -3,6 +3,20 @@
 A hardened, classic Zero Touch Provisioning (ZTP) system for Cisco IOS XE
 devices — without relying on Cisco's PKI/Secure ZTP infrastructure.
 
+> **⚠️ Network isolation is strongly recommended.** Drawbridge's device
+> phone-home call is necessarily unauthenticated (a device has no credential
+> on first contact — see [decisions.md](docs/decisions.md), "No sZTP"), so
+> anyone who can reach the provisioning VLAN can enumerate registered device
+> serials. Drawbridge's allowlist, HTTPS delivery, and hash verification
+> protect *what* gets provisioned; they cannot protect against an attacker
+> already on that VLAN. Drawbridge does not enforce network isolation and
+> will run without it, but doing so knowingly widens who can reach it beyond
+> what its own protections cover. **Run it on a physically/logically
+> isolated provisioning VLAN with switch/firewall controls (802.1X, port
+> security, DHCP snooping) restricting who can attach to it.** See
+> [docs/deployment.md](docs/deployment.md#network-isolation--strongly-recommended)
+> before deploying.
+
 ## Why
 
 Classic ZTP is simple but insecure. Cisco's Secure ZTP (RFC 8572) fixes that,
@@ -35,6 +49,7 @@ provisioning, then dropped in favor of a retention-bounded provisioning log.
 | [Deployment](docs/deployment.md) | Containerfile, Quadlet, dev setup, environment variables |
 | [Testing](docs/testing.md) | Testing approach and key cases |
 | [Decisions & Constraints](docs/decisions.md) | Design tradeoffs and the reasoning behind each |
+| [Security FAQ](docs/security-faq.md) | Known attack vectors in plain terms, what's actually exploitable today, and how to protect a deployment |
 
 ## Quick Start
 
@@ -51,16 +66,21 @@ building the container, and the full list of environment variables.
 
 On an Ubuntu provisioning host, [install.sh](install.sh) installs `podman`
 and Kea if either is missing, installs Drawbridge's `kea/*.conf` into
-`/etc/kea`, and pulls `ghcr.io/0uwl/drawbridge:latest`:
+`/etc/kea`, installs the Quadlet unit to
+`~/.config/containers/systemd/drawbridge.container` for the invoking user
+(skipped if one is already there, so a previously-edited unit is never
+overwritten), and pulls `ghcr.io/0uwl/drawbridge:latest`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v0.1.0-alpha/install.sh | sudo bash
 ```
 
-Review [install.sh](install.sh) before running it — it makes system changes
-(installs packages, writes `/etc/kea`) as root. It does not start the
-Drawbridge container itself; see [docs/deployment.md](docs/deployment.md)
-for the Quadlet unit and `/srv/drawbridge` host directories needed for that.
+Review [install.sh](install.sh) before running it. It makes system changes
+(installs packages, writes `/etc/kea`, writes the Quadlet unit) as root. It
+does not start the Drawbridge container itself — `SECRET_KEY` still needs
+setting in the installed unit and the host data directories still need
+creating; the script prints the exact commands at the end. See
+[docs/deployment.md](docs/deployment.md) for details.
 
 Equivalent from a repo checkout: `./install.sh`.
 

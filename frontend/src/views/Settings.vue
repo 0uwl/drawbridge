@@ -1,8 +1,9 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useSettingsStore } from '../stores/settings'
 import { useUsersStore } from '../stores/users'
+import type { UserCreatePayload } from '../types'
 
 const auth = useAuthStore()
 const settings = useSettingsStore()
@@ -16,16 +17,39 @@ onMounted(() => {
 })
 
 const retentionInput = ref('')
-async function saveRetention() {
+async function saveRetention(): Promise<void> {
   await settings.updateLogRetention(retentionInput.value)
 }
 
-const newUser = reactive({ username: '', role: 'operator' })
-async function createUser() {
+const newUser = reactive<UserCreatePayload>({ username: '', role: 'operator' })
+async function createUser(): Promise<void> {
   const ok = await users.create(newUser.username, newUser.role)
   if (ok) {
     newUser.username = ''
     newUser.role = 'operator'
+  }
+}
+
+const currentPassword = ref('')
+const newPassword = ref('')
+const confirmNewPassword = ref('')
+const changePasswordError = ref<string | null>(null)
+const changePasswordSuccess = ref(false)
+async function submitChangePassword(): Promise<void> {
+  changePasswordError.value = null
+  changePasswordSuccess.value = false
+  if (newPassword.value !== confirmNewPassword.value) {
+    changePasswordError.value = 'Passwords do not match'
+    return
+  }
+  const ok = await auth.changePassword(currentPassword.value, newPassword.value)
+  if (ok) {
+    currentPassword.value = ''
+    newPassword.value = ''
+    confirmNewPassword.value = ''
+    changePasswordSuccess.value = true
+  } else {
+    changePasswordError.value = auth.error
   }
 }
 </script>
@@ -54,6 +78,10 @@ async function createUser() {
     <section v-if="isAdmin">
       <h2 class="text-2xl font-bold mb-4">Users</h2>
       <div v-if="users.error" class="alert alert-error mb-4">{{ users.error }}</div>
+      <div v-if="users.lastClaimToken" class="alert alert-info mb-4 flex justify-between items-center">
+        <span>Claim token (shown once): <code>{{ users.lastClaimToken }}</code></span>
+        <button class="btn btn-xs" @click="users.lastClaimToken = null">Dismiss</button>
+      </div>
 
       <div class="overflow-x-auto mb-4">
         <table class="table">
@@ -81,6 +109,13 @@ async function createUser() {
                 >
                   Make {{ u.role === 'admin' ? 'operator' : 'admin' }}
                 </button>
+                <button
+                  v-if="u.auth_source === 'local'"
+                  class="btn btn-xs"
+                  @click="users.resetPassword(u.id)"
+                >
+                  Reset password
+                </button>
                 <button class="btn btn-error btn-xs" @click="users.remove(u.id)">Delete</button>
               </td>
             </tr>
@@ -101,6 +136,27 @@ async function createUser() {
           </select>
         </label>
         <button type="submit" class="btn btn-primary" :disabled="users.loading">Create</button>
+      </form>
+    </section>
+
+    <section>
+      <h2 class="text-2xl font-bold mb-4">Change Password</h2>
+      <div v-if="changePasswordError" class="alert alert-error mb-4">{{ changePasswordError }}</div>
+      <div v-if="changePasswordSuccess" class="alert alert-success mb-4">Password changed.</div>
+      <form @submit.prevent="submitChangePassword" class="flex items-end gap-3">
+        <label class="form-control">
+          <span class="label-text">Current password</span>
+          <input v-model="currentPassword" type="password" class="input input-bordered" required />
+        </label>
+        <label class="form-control">
+          <span class="label-text">New password</span>
+          <input v-model="newPassword" type="password" class="input input-bordered" required minlength="8" />
+        </label>
+        <label class="form-control">
+          <span class="label-text">Confirm new password</span>
+          <input v-model="confirmNewPassword" type="password" class="input input-bordered" required minlength="8" />
+        </label>
+        <button type="submit" class="btn btn-primary" :disabled="auth.loading">Change password</button>
       </form>
     </section>
   </div>

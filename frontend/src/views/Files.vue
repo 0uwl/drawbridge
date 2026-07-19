@@ -1,8 +1,9 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useFilesStore } from '../stores/files'
 import { formatTimestamp, formatBytes } from '../utils/format'
 import { inferFileType, acceptAttr, TYPE_LABELS } from '../utils/fileTypes'
+import type { FileType, StagedFile, UploadStatus, ZTPFile } from '../types'
 
 const files = useFilesStore()
 onMounted(() => {
@@ -10,20 +11,26 @@ onMounted(() => {
 })
 
 const showUploadModal = ref(false)
-const pendingRemove = ref(null) // { fileType, filename }
-const staged = ref([]) // [{ file, fileType }] — pre-submit selection, not yet queued
+const pendingRemove = ref<{ fileType: FileType; filename: string } | null>(null)
+const staged = ref<StagedFile[]>([]) // pre-submit selection, not yet queued
 const skippedCount = ref(0)
 
-function openUploadModal() {
+const HEX64 = /^[0-9a-fA-F]{64}$/
+const editingFile = ref<ZTPFile | null>(null)
+const editHashValue = ref('')
+const editHashError = ref<string | null>(null)
+
+function openUploadModal(): void {
   files.clearFinished()
   staged.value = []
   skippedCount.value = 0
   showUploadModal.value = true
 }
 
-function onSelect(event) {
-  const picked = Array.from(event.target.files)
-  const valid = []
+function onSelect(event: Event): void {
+  const target = event.target as HTMLInputElement
+  const picked = Array.from(target.files ?? [])
+  const valid: StagedFile[] = []
   let skipped = 0
   for (const file of picked) {
     const fileType = inferFileType(file.name)
@@ -35,26 +42,44 @@ function onSelect(event) {
   }
   staged.value = valid
   skippedCount.value = skipped
-  event.target.value = ''
+  target.value = ''
 }
 
-function removeStaged(index) {
+function removeStaged(index: number): void {
   staged.value.splice(index, 1)
 }
 
-function startUpload() {
+function startUpload(): void {
   files.enqueueAndStart(staged.value)
   staged.value = []
   skippedCount.value = 0
 }
 
-async function confirmRemove() {
+async function confirmRemove(): Promise<void> {
+  if (!pendingRemove.value) return
   const { fileType, filename } = pendingRemove.value
   pendingRemove.value = null
   await files.remove(fileType, filename)
 }
 
-function statusBadgeClass(status) {
+function openEditHash(f: ZTPFile): void {
+  editingFile.value = f
+  editHashValue.value = f.sha256
+  editHashError.value = null
+}
+
+async function saveEditHash(): Promise<void> {
+  if (!editingFile.value) return
+  if (!HEX64.test(editHashValue.value)) {
+    editHashError.value = 'Must be 64 hex characters'
+    return
+  }
+  const { file_type, filename } = editingFile.value
+  const ok = await files.updateHash(file_type, filename, editHashValue.value)
+  if (ok) editingFile.value = null
+}
+
+function statusBadgeClass(status: UploadStatus): string {
   return {
     queued: 'badge-ghost',
     uploading: 'badge-info',
@@ -64,7 +89,7 @@ function statusBadgeClass(status) {
   }[status]
 }
 
-function statusProgressClass(status) {
+function statusProgressClass(status: UploadStatus): string {
   return {
     queued: '',
     uploading: 'progress-info',
@@ -97,7 +122,12 @@ function statusProgressClass(status) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="f in files.items" :key="`${f.file_type}:${f.filename}`">
+          <tr
+            v-for="f in files.items"
+            :key="`${f.file_type}:${f.filename}`"
+            class="cursor-pointer hover"
+            @click="openEditHash(f)"
+          >
             <td class="font-mono">{{ f.filename }}</td>
             <td><span class="badge badge-outline">{{ TYPE_LABELS[f.file_type] }}</span></td>
             <td>{{ formatBytes(f.size_bytes) }}</td>
@@ -106,7 +136,7 @@ function statusProgressClass(status) {
             <td>
               <button
                 class="btn btn-error btn-xs"
-                @click="pendingRemove = { fileType: f.file_type, filename: f.filename }"
+                @click.stop="pendingRemove = { fileType: f.file_type, filename: f.filename }"
               >
                 Delete
               </button>
@@ -141,9 +171,15 @@ function statusProgressClass(status) {
             <li
               v-for="(s, i) in staged"
               :key="s.file.name + i"
-              class="flex items-center justify-between text-sm bg-base-200 rounded px-2 py-1"
+              class="flex items-center justify-between text-sm bg-base-200 rounded px-2 py-1 gap-2"
             >
               <span class="font-mono truncate">{{ s.file.name }}</span>
+              <input
+                v-model="s.sha256"
+                type="text"
+                placeholder="sha256 (optional)"
+                class="input input-bordered input-xs font-mono w-40"
+              />
               <span class="flex items-center gap-2 shrink-0">
                 <span class="badge badge-outline badge-sm">{{ TYPE_LABELS[s.fileType] }}</span>
                 <span class="text-base-content/60">{{ formatBytes(s.file.size) }}</span>
@@ -198,6 +234,26 @@ function statusProgressClass(status) {
         <div class="modal-action">
           <button class="btn" @click="pendingRemove = null">Cancel</button>
           <button class="btn btn-error" @click="confirmRemove">Delete</button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Edit hash modal -->
+    <dialog class="modal" :open="editingFile !== null">
+      <div class="modal-box">
+        <h3 class="font-bold text-lg">Edit hash</h3>
+        <p class="py-2 font-mono text-sm">{{ editingFile?.filename }}</p>
+        <input
+          v-model="editHashValue"
+          type="text"
+          class="input input-bordered font-mono w-full"
+          placeholder="sha256"
+        />
+        <p v-if="editHashError" class="text-error text-sm mt-1">{{ editHashError }}</p>
+        <p v-if="files.error" class="text-error text-sm mt-1">{{ files.error }}</p>
+        <div class="modal-action">
+          <button class="btn" @click="editingFile = null">Cancel</button>
+          <button class="btn btn-primary" @click="saveEditHash">Save</button>
         </div>
       </div>
     </dialog>

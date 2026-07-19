@@ -13,27 +13,46 @@ described in [authentication.md](authentication.md).
 frontend/
 ├── index.html          ← Vite entry HTML
 ├── package.json
+├── tsconfig.json        ← strict TS config for src/**/*.ts and *.vue
 ├── vite.config.js       ← build output path + dev-server proxy (see below)
 ├── public/
 │   └── favicon.svg
 └── src/
-    ├── main.js          ← mounts App, installs Pinia + Vue Router
+    ├── main.ts          ← mounts App, installs Pinia + Vue Router
     ├── App.vue          ← navbar shell + <router-view/>
     ├── style.css        ← Tailwind/DaisyUI entry point (see Styling below)
+    ├── types.ts         ← shared domain types (API models, unions, ApiError)
     ├── api/
-    │   └── client.js    ← single configured axios instance
+    │   └── client.ts    ← typed axios wrapper (get/post/put/delete resolve to the unwrapped payload)
     ├── stores/          ← one Pinia store per domain (auth, devices, sessions, log, users, settings)
     ├── components/
     │   └── DeviceTabs.vue ← shared tab bar (Active Sessions / Allowlist) used by both device views
     ├── utils/
-    │   └── format.js    ← formatTimestamp() — abbreviates ISO timestamps to the browser's local date/time-to-minute
+    │   └── format.ts    ← formatTimestamp() — abbreviates ISO timestamps to the browser's local date/time-to-minute
     ├── router/
-    │   └── index.js     ← routes + the auth navigation guard
+    │   └── index.ts     ← routes + the auth navigation guard
     └── views/           ← Login, Sessions, Devices, Log, Settings
 ```
 
 `frontend/node_modules/` and `frontend/dist/` are gitignored and
 dockerignored — never commit installed packages or build output.
+
+## TypeScript
+
+All of `src/` is TypeScript (`.ts` modules, `.vue` files use
+`<script setup lang="ts">`) — new files should follow the same convention.
+Shared types live in `src/types.ts`; components/stores import from there
+rather than redefining a shape locally. `npm run type-check` runs
+`vue-tsc --noEmit` and is part of CI (`.github/workflows/ci.yml`'s
+`frontend` job).
+
+`typescript` is pinned to `^6.0.3`, not the TypeScript 7 line, even though
+TS7 has shipped stably as `typescript@7`: TS7's package dropped the classic
+compiler-API surface (`lib/tsc`-style internals) that `vue-tsc` — the tool
+that type-checks `.vue` SFCs — still depends on, so `vue-tsc --noEmit`
+currently fails outright against `typescript@7` with
+`ERR_PACKAGE_PATH_NOT_EXPORTED`. Revisit the pin once `vue-tsc`/
+`@vue/language-tools` ship support for TS7's new API surface.
 
 ## Styling
 
@@ -124,7 +143,18 @@ def serve_frontend(path):
 
 Two distinct workflows, depending on what you're changing:
 
-**Frontend work (the common case) — run both servers separately:**
+**Frontend work (the common case) — `./dev.sh`:**
+
+`dev.sh` builds and runs `Containerfile.dev` (Python + Node + Playwright,
+not the production `Containerfile`), which starts both Flask (debug/reload)
+and the Vite dev server (HMR) together inside the container, with the repo
+bind-mounted in and `frontend/node_modules` backed by a named volume so
+installed packages don't land in the host tree. No local Python/Node
+install needed. Browse `http://localhost:5173` (Vite's dev server), not the
+backend port directly.
+
+Running the two dev servers by hand (no container) works the same way, if
+preferred:
 
 ```bash
 # terminal 1: the real backend
@@ -136,14 +166,19 @@ npm install   # first time only
 npm run dev
 ```
 
-Browse `http://localhost:5173` (Vite's dev server), not the backend port.
 Vite's `server.proxy` config forwards `/api`, `/files`, and `/health`
 requests to `http://127.0.0.1:$DRAWBRIDGE_PORT` (default `8080` if unset —
 see [deployment.md](deployment.md)), so the SPA calls the real Flask
 backend while you get instant HMR for `.vue` component changes. `dev.sh`
-exports `DRAWBRIDGE_PORT` before starting both processes, so this matches
-automatically when both are started that way; set it by hand in each
-terminal above if running them separately on a non-default port.
+exports `DRAWBRIDGE_PORT` before starting both processes (inside the
+container or, when run by hand, in each terminal), so this matches
+automatically.
+
+For a real-browser check that frontend behavior actually renders as
+expected (not just that the API returns the right status), see
+`tests/browser-integration/README.md` — it runs a headless Chromium
+against a live `dev.sh` session using the Playwright install already baked
+into `Containerfile.dev`.
 
 **Checking the fully-baked integration — build once, serve through Flask:**
 

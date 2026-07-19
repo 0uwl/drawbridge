@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
-# Starts a local frontend dev session: Flask backend (debug/reload) +
-# Vite dev server (HMR), per docs/frontend.md and docs/deployment.md.
+# Starts a local frontend dev session inside the dev container (built from
+# Containerfile.dev): Flask backend (debug/reload) + Vite dev server (HMR),
+# per docs/frontend.md and docs/deployment.md. No local Python/Node install
+# required — everything runs in the container; only the repo itself and
+# tests/dev-data are bind-mounted so edits on the host take effect live.
 # Browse to http://localhost:5173 — Vite proxies /api, /files, /health to Flask.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-if [ ! -d .venv ]; then
-    echo "==> Creating virtualenv (.venv)"
-    python3 -m venv .venv
-fi
-source .venv/bin/activate
-pip install -q -r requirements.txt
-
-export FLASK_APP=drawbridge/main.py
-export FLASK_DEBUG=1
 export DRAWBRIDGE_PORT="${DRAWBRIDGE_PORT:-8080}"
 export DATABASE_PATH="${DATABASE_PATH:-./tests/dev-data/drawbridge.db}"
 export FILES_PATH="${FILES_PATH:-./tests/dev-data/files}"
@@ -23,22 +17,17 @@ export ADMIN_PASSWORD="${ADMIN_PASSWORD:-dev}"
 export SECRET_KEY="${SECRET_KEY:-dev-only-insecure-secret-key}"
 mkdir -p tests/dev-data
 
-if [ ! -d frontend/node_modules ]; then
-    echo "==> Installing frontend dependencies"
-    (cd frontend && npm install)
-fi
+IMAGE="localhost/drawbridge-dev:latest"
+CONTAINER="drawbridge-dev"
+NODE_MODULES_VOLUME="drawbridge-dev-node-modules"
 
 script_args=("$@")
-pids=()
 cleaned_up=0
 cleanup() {
     [ "$cleaned_up" -eq 1 ] && return
     cleaned_up=1
     echo "==> Stopping dev session"
-    for pid in "${pids[@]}"; do
-        kill "$pid" 2>/dev/null || true
-    done
-    wait 2>/dev/null || true
+    podman stop -t 5 "$CONTAINER" >/dev/null 2>&1 || true
     reset_dev_database
     clear_uploaded_files
 }
@@ -87,12 +76,21 @@ post_session_prompt() {
 trap cleanup EXIT TERM
 trap 'cleanup; post_session_prompt' INT
 
-echo "==> Starting Flask backend on :$DRAWBRIDGE_PORT"
-flask run --port $DRAWBRIDGE_PORT &
-pids+=($!)
+echo "==> Building dev container image"
+podman build -f Containerfile.dev -t "$IMAGE" .
 
-echo "==> Starting Vite dev server on :5173"
-(cd frontend && npm run dev) &
-pids+=($!)
-
-wait
+echo "==> Starting dev container (Flask :$DRAWBRIDGE_PORT, Vite :5173)"
+podman run --rm --name "$CONTAINER" \
+    -p "${DRAWBRIDGE_PORT}:${DRAWBRIDGE_PORT}" \
+    -p 5173:5173 \
+    -v "$PWD:/app:Z" \
+    -v "${NODE_MODULES_VOLUME}:/app/frontend/node_modules" \
+    -e FLASK_APP=drawbridge/main.py \
+    -e FLASK_DEBUG=1 \
+    -e DRAWBRIDGE_PORT \
+    -e DATABASE_PATH \
+    -e FILES_PATH \
+    -e KEA_CTRL_URL \
+    -e ADMIN_PASSWORD \
+    -e SECRET_KEY \
+    "$IMAGE"

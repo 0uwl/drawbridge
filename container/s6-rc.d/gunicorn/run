@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /app
+exec gunicorn "drawbridge:create_app()" -c drawbridge/gunicorn.conf.py

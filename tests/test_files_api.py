@@ -5,17 +5,34 @@ import os
 import pytest
 
 from drawbridge.db import get_session
-from drawbridge.models import ZTPFile
+from drawbridge.models import ProvisioningSession, ZTPFile
 
 BASE = '/files'
+ROUTE_TYPE = {'images': 'image', 'configs': 'config', 'scripts': 'script'}
 
 
-def upload(client, route, filename, content=b'test content'):
+def upload(client, route, filename, content=b'test content', sha256=None):
+    data = {'file': (io.BytesIO(content), filename)}
+    if sha256 is not None:
+        data['sha256'] = sha256
     return client.post(
         f'{BASE}/{route}',
-        data={'file': (io.BytesIO(content), filename)},
+        data=data,
         content_type='multipart/form-data',
     )
+
+
+@pytest.fixture()
+def active_session(app):
+    """A bare ProvisioningSession matching the test client's default
+    REMOTE_ADDR — files.py's serve gate only checks IP, so no Device row
+    is needed."""
+    with app.app_context():
+        session = get_session()
+        ps = ProvisioningSession(serial='FJC2517X0AB', ip='127.0.0.1', state='lease_approved')
+        session.add(ps)
+        session.commit()
+    return ps
 
 
 # --- GET /files/<type> — list ---
@@ -163,9 +180,54 @@ def test_upload_image_does_not_appear_in_config_listing(logged_in_client):
     assert response.get_json()['payload'] == []
 
 
+# --- POST /files/<type> — optional sha256 verification on upload ---
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_upload_with_correct_sha256_succeeds(app, logged_in_client, route, filename):
+    content = b'test content'
+    correct_hash = hashlib.sha256(content).hexdigest()
+    response = upload(logged_in_client, route, filename, content, sha256=correct_hash)
+    assert response.status_code == 201
+    with app.app_context():
+        f = get_session().get(ZTPFile, (ROUTE_TYPE[route], filename))
+        assert f is not None
+        assert f.sha256 == correct_hash
+
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_upload_with_wrong_sha256_returns_422(app, logged_in_client, route, filename):
+    content = b'test content'
+    wrong_hash = hashlib.sha256(b'not the real content').hexdigest()
+    response = upload(logged_in_client, route, filename, content, sha256=wrong_hash)
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'hash_mismatch'
+    with app.app_context():
+        assert get_session().get(ZTPFile, (ROUTE_TYPE[route], filename)) is None
+    assert not os.path.isfile(os.path.join(app.config['FILES_PATH'], route, filename))
+
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_upload_with_malformed_sha256_returns_422(logged_in_client, route, filename):
+    response = upload(logged_in_client, route, filename, sha256='not-a-hash')
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'invalid_hash'
+
+
 # --- GET /files/<type>/<filename> — serve ---
 
-def test_serve_image_is_accessible_without_auth(app, client, logged_in_client):
+def test_serve_image_is_accessible_with_active_session(app, client, logged_in_client, active_session):
     content = b'fake ios xe firmware bytes'
     upload(logged_in_client, 'images', 'firmware.bin', content)
     response = client.get(f'{BASE}/images/firmware.bin')
@@ -173,7 +235,7 @@ def test_serve_image_is_accessible_without_auth(app, client, logged_in_client):
     assert response.data == content
 
 
-def test_serve_config_is_accessible_without_auth(app, client, logged_in_client):
+def test_serve_config_is_accessible_with_active_session(app, client, logged_in_client, active_session):
     content = b'hostname spine-1'
     upload(logged_in_client, 'configs', 'spine.cfg', content)
     response = client.get(f'{BASE}/configs/spine.cfg')
@@ -181,7 +243,10 @@ def test_serve_config_is_accessible_without_auth(app, client, logged_in_client):
     assert response.data == content
 
 
-def test_serve_script_is_accessible_without_auth(app, client, logged_in_client):
+def test_serve_script_is_accessible_without_auth_or_session(app, client, logged_in_client):
+    """No active_session fixture used here — this is the proof scripts stay
+    ungated (they're fetched via DHCP Option 67 before any serial is known,
+    see beta.md §7)."""
     content = b'import cli\ncli.execute("show version")'
     upload(logged_in_client, 'scripts', 'ztp.py', content)
     response = client.get(f'{BASE}/scripts/ztp.py')
@@ -190,11 +255,27 @@ def test_serve_script_is_accessible_without_auth(app, client, logged_in_client):
 
 
 @pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+])
+def test_serve_returns_403_without_active_session(client, logged_in_client, route, filename):
+    upload(logged_in_client, route, filename)
+    response = client.get(f'{BASE}/{route}/{filename}')
+    assert response.status_code == 403
+    assert response.get_json()['error'] == 'no_active_session'
+
+
+def test_serve_returns_404_for_missing_script(client):
+    response = client.get(f'{BASE}/scripts/nonexistent.py')
+    assert response.status_code == 404
+    assert response.get_json()['error'] == 'file_not_found'
+
+
+@pytest.mark.parametrize('route,filename', [
     ('images',  'nonexistent.bin'),
     ('configs', 'nonexistent.cfg'),
-    ('scripts', 'nonexistent.py'),
 ])
-def test_serve_returns_404_for_missing_file(client, route, filename):
+def test_serve_returns_404_for_missing_file_with_active_session(client, active_session, route, filename):
     response = client.get(f'{BASE}/{route}/{filename}')
     assert response.status_code == 404
     assert response.get_json()['error'] == 'file_not_found'
@@ -206,7 +287,7 @@ def test_serve_returns_404_for_missing_file(client, route, filename):
     '..%2f..%2fmain.py',
     '%2e%2e%2f%2e%2e%2fmain.py',
 ])
-def test_serve_rejects_path_traversal_attempts(client, route, escaped_path):
+def test_serve_rejects_path_traversal_attempts(client, active_session, route, escaped_path):
     """The <path:filename> route converter accepts '/', so a traversal
     attempt reaches this blueprint's own get_file() DB lookup rather than
     falling through route-matching to main.py's SPA catch-all (which would
@@ -258,7 +339,7 @@ def test_delete_removes_file_from_disk(app, logged_in_client):
     assert not os.path.exists(os.path.join(app.config['FILES_PATH'], 'images', 'firmware.bin'))
 
 
-def test_deleted_file_is_no_longer_served(client, logged_in_client):
+def test_deleted_file_is_no_longer_served(client, logged_in_client, active_session):
     upload(logged_in_client, 'images', 'firmware.bin')
     logged_in_client.delete(f'{BASE}/images/firmware.bin')
     response = client.get(f'{BASE}/images/firmware.bin')
@@ -271,3 +352,45 @@ def test_delete_only_removes_file_of_matching_type(app, logged_in_client):
     upload(logged_in_client, 'configs', 'spine.cfg')
     logged_in_client.delete(f'{BASE}/configs/spine.cfg')
     assert os.path.isfile(os.path.join(app.config['FILES_PATH'], 'images', 'firmware.bin'))
+
+
+# --- PUT /files/<type>/<filename> — edit stored hash ---
+
+VALID_HASH = 'a' * 64
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_put_hash_returns_401_when_not_logged_in(client, route, filename):
+    response = client.put(f'{BASE}/{route}/{filename}', json={'sha256': VALID_HASH})
+    assert response.status_code == 401
+
+
+def test_put_hash_returns_404_when_file_not_found(logged_in_client):
+    response = logged_in_client.put(f'{BASE}/images/nonexistent.bin', json={'sha256': VALID_HASH})
+    assert response.status_code == 404
+    assert response.get_json()['error'] == 'file_not_found'
+
+
+def test_put_hash_returns_422_for_malformed_hash(logged_in_client):
+    upload(logged_in_client, 'images', 'firmware.bin')
+    response = logged_in_client.put(f'{BASE}/images/firmware.bin', json={'sha256': 'not-a-hash'})
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'invalid_hash'
+
+
+@pytest.mark.parametrize('route,filename', [
+    ('images',  'firmware.bin'),
+    ('configs', 'spine.cfg'),
+    ('scripts', 'ztp.py'),
+])
+def test_put_hash_updates_db_record(app, logged_in_client, route, filename):
+    upload(logged_in_client, route, filename)
+    response = logged_in_client.put(f'{BASE}/{route}/{filename}', json={'sha256': VALID_HASH})
+    assert response.status_code == 200
+    assert response.get_json()['payload']['sha256'] == VALID_HASH
+    with app.app_context():
+        f = get_session().get(ZTPFile, (ROUTE_TYPE[route], filename))
+        assert f.sha256 == VALID_HASH

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
@@ -6,22 +6,33 @@ import { useAuthStore } from '../stores/auth'
 const auth = useAuthStore()
 const router = useRouter()
 
-const mode = ref('login') // 'login' | 'claim' | 'reset'
+const mode = ref<'login' | 'claim' | 'reset'>('login')
 const username = ref('')
 const password = ref('')
 const newPassword = ref('')
+const confirmPassword = ref('')
+const claimToken = ref('')
 
-async function submit() {
+async function submit(): Promise<void> {
   if (mode.value === 'reset') {
+    if (newPassword.value !== confirmPassword.value) {
+      auth.error = 'Passwords do not match'
+      return
+    }
     const ok = await auth.resetPassword(username.value, password.value, newPassword.value)
     if (ok) router.push('/devices')
+    return
+  }
+
+  if (mode.value === 'claim' && password.value !== confirmPassword.value) {
+    auth.error = 'Passwords do not match'
     return
   }
 
   const ok =
     mode.value === 'login'
       ? await auth.login(username.value, password.value)
-      : await auth.claim(username.value, password.value)
+      : await auth.claim(username.value, password.value, claimToken.value)
 
   if (!ok) return
 
@@ -34,6 +45,8 @@ async function submit() {
   } else {
     mode.value = 'login'
     password.value = ''
+    confirmPassword.value = ''
+    claimToken.value = ''
   }
 }
 </script>
@@ -55,13 +68,27 @@ async function submit() {
             <span class="label-text">Username</span>
             <input v-model="username" type="text" class="input input-bordered" required />
           </label>
+          <label v-if="mode === 'claim'" class="form-control">
+            <span class="label-text">Claim token</span>
+            <input v-model="claimToken" type="text" class="input input-bordered" required />
+          </label>
           <label v-if="mode !== 'reset'" class="form-control">
             <span class="label-text">{{ mode === 'login' ? 'Password' : 'New password' }}</span>
-            <input v-model="password" type="password" class="input input-bordered" required />
+            <input
+              v-model="password"
+              type="password"
+              class="input input-bordered"
+              required
+              :minlength="mode === 'claim' ? 8 : undefined"
+            />
           </label>
           <label v-if="mode === 'reset'" class="form-control">
             <span class="label-text">New password</span>
-            <input v-model="newPassword" type="password" class="input input-bordered" required />
+            <input v-model="newPassword" type="password" class="input input-bordered" required minlength="8" />
+          </label>
+          <label v-if="mode !== 'login'" class="form-control">
+            <span class="label-text">Confirm password</span>
+            <input v-model="confirmPassword" type="password" class="input input-bordered" required minlength="8" />
           </label>
 
           <div v-if="auth.error" class="alert alert-error text-sm">{{ auth.error }}</div>
@@ -70,6 +97,9 @@ async function submit() {
             {{ mode === 'login' ? 'Log in' : mode === 'claim' ? 'Set password' : 'Set new password' }}
           </button>
         </form>
+
+        <div v-if="mode === 'login'" class="divider text-xs">or</div>
+        <a v-if="mode === 'login'" href="/saml/login" class="btn btn-outline btn-sm">Log in with SSO</a>
       </div>
     </div>
   </div>

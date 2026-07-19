@@ -19,7 +19,8 @@ def create_blueprint():
         if not serial:
             return error_response('Request is missing required parameter serial', 'missing_parameter', code=422)
 
-        mac = request.args.get('mac')  # optional, audit/logging only — not used for lookup
+        mac = request.args.get('mac')  # optional; pinned alongside ip on first call for this
+        # serial, compared (not overwritten) on repeats — see create_provisioning_session
 
         session = get_session()
         device = get_device(session, serial)
@@ -27,7 +28,7 @@ def create_blueprint():
         if device is None:
             return error_response(f'{serial} not found', 'device_not_found', code=404)
 
-        create_provisioning_session(
+        ps = create_provisioning_session(
             session,
             serial=serial,
             mac=mac,
@@ -35,6 +36,10 @@ def create_blueprint():
             image=device.image,
             config_file=device.config_file,
         )
+        if ps is None:
+            return error_response(
+                f'{serial} is already pinned to a different mac/ip', 'session_mismatch', code=409, silent=True,
+            )
         session.commit()
 
         return success_response(f'{serial} approved', payload=device.as_dict())
@@ -58,6 +63,11 @@ def create_blueprint():
 
         if active is None:
             return error_response(f'{serial} is not in active provisioning', 'device_not_active', code=404)
+
+        if active.ip != request.remote_addr:
+            return error_response(
+                f'{serial} request does not match its active session', 'session_mismatch', code=409, silent=True,
+            )
 
         # Falls back to the session's assigned image/config_file (set at
         # approval time from the Device row — see provision_request above)
