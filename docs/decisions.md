@@ -223,7 +223,7 @@
 
 - **`install.sh`'s curl-pipe fetch is pinned to a branch ref, not a release
   tag — revisit once real releases start.** When `install.sh` is run via
-  `curl | sudo bash` there's no sibling `kea/` directory to read from, so it
+  `curl | bash` there's no sibling `kea/` directory to read from, so it
   fetches `kea/kea-dhcp4.conf`/`kea/kea-ctrl-agent.conf` from
   `raw.githubusercontent.com` at a hardcoded ref (`RAW_BASE`). That same ref
   is duplicated in `README.md`'s curl one-liner, and a CI check
