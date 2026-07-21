@@ -8,12 +8,12 @@ RUN npm ci
 COPY frontend/ .
 RUN npm run build
 
-FROM python:3.12-slim
+FROM python:3.12-slim as final
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-RUN useradd --uid 1000 --create-home drawbridge
+RUN useradd --no-log-init --uid 1000 --create-home drawbridge
 
 # s6-overlay (process supervisor) + rsyslog (device syslog collection — see
 # docs/logging.md / beta.md §5, "in-container rsyslog via s6-overlay, not a
