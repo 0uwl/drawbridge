@@ -41,7 +41,7 @@ def test_kea_dhcp4_conf_is_valid_json(dhcp4_conf):
 
 
 def test_kea_ctrl_agent_conf_is_valid_json():
-    conf = _load_jsonc(KEA_DIR / 'kea-ctrl-agent.conf')['CtrlAgent']
+    conf = _load_jsonc(KEA_DIR / 'kea-ctrl-agent.conf')['Control-agent']
     assert conf['control-sockets']['dhcp4']['socket-name']
 
 
