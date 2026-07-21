@@ -79,7 +79,10 @@ if ! command -v kea-dhcp4 >/dev/null 2>&1; then
     # used solely for local kea-shell diagnostics, never called by
     # Drawbridge itself. "unconfigured" here matches that: skip the
     # package's own optional API password setup rather than silently
-    # picking one.
+    # picking one. The package's systemd unit still requires a non-empty
+    # /etc/kea/kea-api-password to start regardless (see below) - that's
+    # handled separately from this debconf choice, on purpose, so it isn't
+    # tied to package-version-specific debconf/postinst behavior.
     echo "kea-ctrl-agent kea-ctrl-agent/make_a_choice select unconfigured" | debconf-set-selections
     apt-get install -y kea-dhcp4-server kea-ctrl-agent
 else
@@ -162,6 +165,24 @@ for conf in kea-dhcp4.conf kea-ctrl-agent.conf; do
     fi
     install -m 644 "$kea_conf_dir/$conf" "/etc/kea/$conf"
 done
+
+# kea-ctrl-agent's packaged systemd unit has
+# ConditionFileNotEmpty=/etc/kea/kea-api-password and just silently skips
+# starting (not even a failure exit) if that file is missing/empty -
+# choosing "unconfigured" above means the package's own postinst never
+# creates it. kea-ctrl-agent.conf has no "authentication" stanza, so Kea
+# itself never actually reads or enforces this file as a real credential;
+# it exists purely to satisfy the systemd condition. Generated once here,
+# not tied to the apt-get install block above, so re-running install.sh
+# against an already-installed Kea (which skips that block entirely) still
+# fixes a host stuck in this state.
+kea_api_password_file=/etc/kea/kea-api-password
+if [ ! -s "$kea_api_password_file" ]; then
+    echo "==> Generating $kea_api_password_file (required by kea-ctrl-agent's systemd unit)"
+    head -c 32 /dev/urandom | base64 | tr -d '\n' > "$kea_api_password_file"
+    chmod 0640 "$kea_api_password_file"
+    chgrp _kea "$kea_api_password_file"
+fi
 
 kea-dhcp4 -t /etc/kea/kea-dhcp4.conf
 kea-ctrl-agent -t /etc/kea/kea-ctrl-agent.conf
