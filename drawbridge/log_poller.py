@@ -1,4 +1,4 @@
-"""Tails rsyslog's FIFO (see /etc/rsyslog-drawbridge.conf, the ompipe
+"""Tails rsyslog's FIFO (see /etc/rsyslog.d/drawbridge.conf, the ompipe
 action) and inserts each line as a DeviceLogEntry via the existing db.py
 session machinery. Runs as its own s6 service (log-poller), sibling to
 gunicorn — see Containerfile.

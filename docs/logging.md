@@ -23,8 +23,11 @@ services, defined under `container/s6-rc.d/`:
 
 - **`gunicorn`** — the app itself, unchanged from before.
 - **`rsyslog`** — listens for device syslog on UDP+TCP `:10514` (see
-  `container/rsyslog-drawbridge.conf`), writes matched lines to a named
-  pipe at `/run/rsyslog/devicelog.fifo`.
+  `container/rsyslog-drawbridge.conf`, installed to
+  `/etc/rsyslog.d/drawbridge.conf` in the image — not some other top-level
+  `/etc` path, since the rsyslog package's own bundled AppArmor profile
+  only allows `/etc/rsyslog.conf` and `/etc/rsyslog.d/**`), writes matched
+  lines to a named pipe at `/run/rsyslog/devicelog.fifo`.
 - **`log-poller`** (`drawbridge/log_poller.py`) — tails that FIFO and
   inserts each line as a `DeviceLogEntry` via the existing
   `app.extensions['db_session_factory']` (the same hook `db.py`'s
@@ -33,9 +36,14 @@ services, defined under `container/s6-rc.d/`:
 
 **Why :10514, not the standard :514**: 514 is a privileged port, and the
 image runs as non-root UID 1000 throughout (no `CAP_NET_BIND_SERVICE`, no
-root init phase for s6-overlay). Podman remaps the standard port at the
-network layer instead — see `quadlet/drawbridge.container`'s
-`PublishPort=514:10514/udp` and `/tcp`.
+root init phase for s6-overlay). The host side stays `:10514` too, rather
+than remapping down to the standard `:514` — see
+`quadlet/drawbridge.container`'s `PublishPort=10514:10514/udp` and `/tcp`.
+Rootless Podman's `rootlessport` helper can't bind a host port below 1024
+without a host-wide sysctl change, and forcing `:514` on the host would
+also risk colliding with any other syslog daemon already listening there
+— so devices' logging destination just needs to be pointed at `:10514`
+explicitly instead of the syslog default (see the IOS-XE example below).
 
 **Why a named pipe (`ompipe`), not a plain file (`omfile`)**: a file on
 tmpfs would need the poller to also solve rotation/truncation — a real race
@@ -101,8 +109,9 @@ C9200CX/other-platform/local-testing dispatch documented in
 [decisions.md](decisions.md)). Called from `main()` at three points: start,
 after the provision-request decision, and on completion. On real hardware,
 the device is also configured to send its own syslog
-(`logging host <drawbridge-ip> transport {udp|tcp} port 514`) to
-Drawbridge — no realistic way to unit-test that device-side config without
+(`logging host <drawbridge-ip> transport {udp|tcp} port 10514` — the
+non-standard port matters here, see "Why :10514" above) to Drawbridge — no
+realistic way to unit-test that device-side config without
 hardware, documented here as manually verified, same posture as other
 C9200CX-dependent behavior in this file.
 

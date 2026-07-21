@@ -83,8 +83,8 @@ build:
   - rsyslog listens on **:10514** inside the container, not the standard
     :514 — 514 is a privileged port and the image runs as non-root UID 1000
     throughout (no `CAP_NET_BIND_SERVICE`, no root init phase). The
-    Quadlet unit remaps host `:514` to container `:10514` instead — see
-    `PublishPort=` below
+    Quadlet unit publishes `:10514` on the host too, rather than remapping
+    down to `:514` — see `PublishPort=` below
   - `/app/data` and `/app/files` are mount points — do not COPY content there
   - Root filesystem is read-only at runtime; `/tmp` and `/run` are tmpfs
     (rsyslog's own working directory and the poller's FIFO both live under
@@ -157,21 +157,34 @@ terminates TLS.
 
 See [logging.md](logging.md) for the full design (rsyslog-in-container via
 s6-overlay, the FIFO→poller→DB path, the `DeviceLogEntry` schema, and the
-two `/api/v1/device-logs` routes). Quadlet publishes both UDP and TCP:
+two `/api/v1/device-logs` routes). Quadlet publishes both UDP and TCP on
+**`:10514`, not the standard `:514`**:
 
 ```ini
-PublishPort=514:10514/udp
-PublishPort=514:10514/tcp
+PublishPort=10514:10514/udp
+PublishPort=10514:10514/tcp
 ```
+
+This is deliberate, not just an in-container detail: rootless Podman's
+`rootlessport` helper has to bind whatever host port is on the left side
+of `PublishPort=`, and only root can bind ports below 1024 by default —
+publishing to `:514` directly fails with `rootlessport cannot expose
+privileged port 514 ... bind: permission denied` unless the host's
+`net.ipv4.ip_unprivileged_port_start` sysctl is lowered. Rather than make
+that host-wide change (and risk colliding with any other syslog daemon
+already listening on the host's standard `:514`), devices' logging
+destination just needs to be configured to point at **`:10514`** on the
+Drawbridge host explicitly — see `logger -P 10514` below and the IOS-XE
+example in [logging.md](logging.md).
 
 No unit test covers the supervisor/rsyslog wiring itself (infra, not
 logic) — verify manually after `podman build`/`podman run`:
 
 ```bash
 # TCP
-logger -n <drawbridge-host> -P 514 -T "smoke test tcp"
+logger -n <drawbridge-host> -P 10514 -T "smoke test tcp"
 # UDP
-logger -n <drawbridge-host> -P 514 -d "smoke test udp"
+logger -n <drawbridge-host> -P 10514 -d "smoke test udp"
 ```
 
 Then confirm a `source: 'syslog'` row appears via
