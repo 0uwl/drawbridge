@@ -13,6 +13,13 @@
 # fetched from RAW_BASE into a temp dir.
 set -euo pipefail
 
+# kea-ctrl-agent's package asks a debconf question (API password) on install;
+# without a noninteractive frontend, apt-get hangs/fails waiting on a
+# terminal that isn't there for a piped `curl | sudo bash` run (or any other
+# unattended invocation). DEBIAN_FRONTEND=noninteractive answers every
+# debconf prompt with its declared default instead of showing a dialog.
+export DEBIAN_FRONTEND=noninteractive
+
 IMAGE="ghcr.io/0uwl/drawbridge:latest"
 # Pinned to this branch because kea/*.conf isn't on main yet; repoint at
 # main (and the README's curl one-liner) once this branch merges.
@@ -67,6 +74,13 @@ fi
 if ! command -v kea-dhcp4 >/dev/null 2>&1; then
     echo "==> Installing Kea"
     apt_update_once
+    # kea-ctrl-agent/kea-ctrl-agent.conf ships no API auth on purpose - the
+    # Control Agent is loopback-only (127.0.0.1:8081, see docs/kea.md) and
+    # used solely for local kea-shell diagnostics, never called by
+    # Drawbridge itself. "unconfigured" here matches that: skip the
+    # package's own optional API password setup rather than silently
+    # picking one.
+    echo "kea-ctrl-agent kea-ctrl-agent/make_a_choice select unconfigured" | debconf-set-selections
     apt-get install -y kea-dhcp4-server kea-ctrl-agent
 else
     echo "==> Kea already installed ($(kea-dhcp4 -V))"
