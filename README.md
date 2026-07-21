@@ -72,7 +72,7 @@ and Kea if either is missing, installs Drawbridge's `kea/*.conf` into
 overwritten), and pulls `ghcr.io/0uwl/drawbridge:latest`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v0.1.0-alpha/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/main/install.sh | sudo bash
 ```
 
 Review [install.sh](install.sh) before running it. It makes system changes
