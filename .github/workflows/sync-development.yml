@@ -1,0 +1,38 @@
+name: Sync development from main
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  sync:
+    name: Open PR into development
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      # No checkout needed - gh operates against the GitHub API directly via
+      # --repo, not a local clone.
+      - name: Open (or leave alone) a PR from main into development
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          open_count=$(gh pr list --repo "$REPO" --base development --head main --state open --json number --jq 'length')
+          if [ "$open_count" -gt 0 ]; then
+            echo "A PR from main into development is already open - GitHub keeps its diff up to date automatically, nothing to do."
+            exit 0
+          fi
+
+          if output=$(gh pr create --repo "$REPO" --base development --head main \
+            --title "Sync main into development" \
+            --body "Automated sync opened by the sync-development workflow after a push to main. Merge to bring \`development\` up to date. Conflicts, if any, show up below for manual resolution - nothing is force-pushed." 2>&1); then
+            echo "$output"
+          elif echo "$output" | grep -qi "No commits between"; then
+            echo "development is already up to date with main - nothing to do."
+          else
+            echo "$output" >&2
+            exit 1
+          fi
