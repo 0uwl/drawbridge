@@ -64,15 +64,20 @@ building the container, and the full list of environment variables.
 
 ## Installation
 
-On an Ubuntu provisioning host, [install.sh](install.sh) installs `podman`
-and Kea if either is missing, installs Drawbridge's `kea/*.conf` into
-`/etc/kea`, installs the Quadlet unit to
+`ghcr.io/0uwl/drawbridge:latest` is a multi-arch image (`amd64` and
+`arm64`) — it runs as-is on a Raspberry Pi (64-bit Raspberry Pi OS) or any
+other arm64/amd64 Ubuntu/Debian host; Podman/Docker pull the matching arch
+automatically, no extra flags needed.
+
+On an Ubuntu/Debian provisioning host, [install.sh](install.sh) installs
+`podman` and Kea if either is missing, installs Drawbridge's `kea/*.conf`
+into `/etc/kea`, installs the Quadlet unit to
 `~/.config/containers/systemd/drawbridge.container` for the invoking user
 (skipped if one is already there, so a previously-edited unit is never
 overwritten), and pulls `ghcr.io/0uwl/drawbridge:latest`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v0.1.0-alpha/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/main/install.sh | sudo bash
 ```
 
 Review [install.sh](install.sh) before running it. It makes system changes
