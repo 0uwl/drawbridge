@@ -21,6 +21,10 @@ jobs:
         run: pytest -v
       - name: Containerfile linting
         uses: immanuwell/dockerfile-roast@1.4.4
+        with:
+          files: '**/Containerfile'
+          engine: podman
+          preset: production
 
   frontend:
     name: Frontend type-check
