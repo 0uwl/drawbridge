@@ -19,8 +19,8 @@ RAW_BASE="https://raw.githubusercontent.com/0uwl/drawbridge/v0.1.0-alpha"
 KEA_DHCP4_SERVICE="kea-dhcp4-server"
 KEA_CTRL_AGENT_SERVICE="kea-ctrl-agent"
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-if [ -f "$script_dir/kea/kea-dhcp4.conf" ]; then
+script_source="${BASH_SOURCE[0]:-}"
+if [ -n "$script_source" ] && script_dir="$(cd "$(dirname "$script_source")" >/dev/null 2>&1 && pwd)" && [ -f "$script_dir/kea/kea-dhcp4.conf" ]; then
     kea_conf_dir="$script_dir/kea"
     quadlet_src="$script_dir/quadlet/drawbridge.container"
 else
