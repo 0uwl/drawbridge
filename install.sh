@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Installs podman and Kea on an Ubuntu provisioning host if not already
-# present, installs Drawbridge's kea/*.conf into /etc/kea, installs the
-# Quadlet unit for the invoking (non-root) user, and pulls the published
-# container image. Does not start the Drawbridge container itself — SECRET_KEY
-# and the host data directories still need setting up by hand; see the "Done"
-# message this script prints and docs/deployment.md.
+# Installs podman and Kea on an Ubuntu/Debian provisioning host (amd64 or
+# arm64, e.g. Raspberry Pi OS) if not already present, installs Drawbridge's
+# kea/*.conf into /etc/kea, installs the Quadlet unit for the invoking
+# (non-root) user, and pulls the published container image. Does not start
+# the Drawbridge container itself — SECRET_KEY and the host data directories
+# still need setting up by hand; see the "Done" message this script prints
+# and docs/deployment.md.
 #
 # Runnable standalone (curl -fsSL .../install.sh | sudo bash) as well as from
 # a repo checkout — when kea/*.conf isn't found next to this script (piped

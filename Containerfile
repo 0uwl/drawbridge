@@ -1,14 +1,21 @@
 # Build the Vue SPA (frontend/) into static assets. Built here rather than
 # on the host so the image doesn't depend on a local Node install — see
-# docs/frontend.md.
-FROM node:22-slim AS frontend-build
+# docs/frontend.md. --platform=$BUILDPLATFORM pins this stage to the build
+# host's own architecture rather than the target one: the output is
+# arch-independent JS/CSS, so a linux/arm64 image build doesn't need to run
+# this stage under QEMU emulation.
+FROM --platform=$BUILDPLATFORM node:22-slim AS frontend-build
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 COPY frontend/ .
 RUN npm run build
 
-FROM python:3.12-slim as final
+# Multi-arch (linux/amd64, linux/arm64 — e.g. Raspberry Pi 64-bit OS):
+#   docker buildx build --platform linux/amd64,linux/arm64 -t <tag> --push .
+# python:3.12-slim publishes both arches natively; this stage is left
+# unpinned so buildx targets whichever platform is being built.
+FROM python:3.12-slim AS final
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -25,7 +32,11 @@ ARG S6_OVERLAY_VERSION=3.2.0.2
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils rsyslog \
     && rm -rf /var/lib/apt/lists/* \
-    && S6_ARCH=$(case "$TARGETARCH" in amd64) echo x86_64 ;; arm64) echo aarch64 ;; *) echo x86_64 ;; esac) \
+    && case "$TARGETARCH" in \
+         amd64) S6_ARCH=x86_64 ;; \
+         arm64) S6_ARCH=aarch64 ;; \
+         *) echo "Unsupported TARGETARCH: '$TARGETARCH' (expected amd64 or arm64)" >&2; exit 1 ;; \
+       esac \
     && curl -fsSL -o /tmp/s6-overlay-noarch.tar.xz "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" \
     && curl -fsSL -o /tmp/s6-overlay-arch.tar.xz "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" \
     && tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \

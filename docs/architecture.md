@@ -31,7 +31,7 @@ Provisioning VLAN
        │
        ▼
 ┌─────────────────────────────────────────────────────┐
-│  Ubuntu host (dedicated provisioning machine)       │
+│  Ubuntu/Debian host (amd64/arm64, e.g. Raspberry Pi)│
 │                                                     │
 │  ┌─────────────────────┐                            │
 │  │  Kea DHCPv4         │  native systemd service,   │
