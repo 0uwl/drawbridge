@@ -59,11 +59,16 @@ part of the deployment, not an optional hardening step layered on later.
 
 ## Container
 
-**Containerfile** builds `localhost/drawbridge:latest` as a multi-stage
+**Containerfile** builds `localhost/drawbridge:latest` as a multi-stage,
+multi-arch (`linux/amd64`, `linux/arm64` — e.g. 64-bit Raspberry Pi OS)
 build:
-- Stage 1 (`node:22-slim`): builds the Vue frontend (`frontend/`) with
-  `npm ci && npm run build`. See [frontend.md](frontend.md).
-- Stage 2 (`python:3.12-slim`, the final image):
+- Stage 1 (`node:22-slim`, pinned to `--platform=$BUILDPLATFORM`): builds the
+  Vue frontend (`frontend/`) with `npm ci && npm run build`. Pinned to the
+  build host's own arch rather than the target one, since the output is
+  arch-independent JS/CSS and doesn't need to run under QEMU emulation. See
+  [frontend.md](frontend.md).
+- Stage 2 (`python:3.12-slim`, the final image, built for whichever
+  `--platform` is requested):
   - Non-root user `drawbridge` (UID 1000) created in image
   - `COPY --from=` pulls the built frontend assets from stage 1 into
     `drawbridge/static/` — Node never ships in the final image
@@ -84,6 +89,10 @@ build:
   - Root filesystem is read-only at runtime; `/tmp` and `/run` are tmpfs
     (rsyslog's own working directory and the poller's FIFO both live under
     `/run`, so no extra volume is needed for logging)
+  - The s6-overlay download resolves `TARGETARCH` (buildx-supplied) to the
+    matching s6-overlay release arch (`amd64`→`x86_64`, `arm64`→`aarch64`);
+    an unrecognized `TARGETARCH` fails the build rather than silently
+    falling back to an `x86_64` binary on a non-`x86_64` image (fail closed)
 
 **Quadlet** at `~/.config/containers/systemd/drawbridge.container`, run as
 whichever user invokes it — there's no dedicated `drawbridge` system user.
@@ -295,6 +304,17 @@ pytest
 
 # Build the production container image (multi-stage: builds frontend/, then the Flask image)
 podman build -t localhost/drawbridge:latest .
+
+# Build for a specific arch other than the host's (e.g. targeting a Raspberry
+# Pi from an amd64 dev machine) - requires qemu-user-static for the emulated
+# arch to be installed on the build host
+podman build --arch arm64 -t localhost/drawbridge:latest .
+
+# Build and push a single multi-arch manifest covering both amd64 and arm64
+podman manifest create drawbridge-manifest
+podman build --arch amd64 --manifest drawbridge-manifest .
+podman build --arch arm64 --manifest drawbridge-manifest .
+podman manifest push drawbridge-manifest <registry>/drawbridge:latest
 ```
 
 ## Environment Variables
