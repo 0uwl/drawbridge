@@ -2,23 +2,25 @@
 # Installs podman and Kea on an Ubuntu/Debian provisioning host (amd64 or
 # arm64, e.g. Raspberry Pi OS) if not already present, installs Drawbridge's
 # kea/*.conf into /etc/kea, installs the Quadlet unit for the invoking
-# (non-root) user, and pulls the published container image. Does not start
-# the Drawbridge container itself — SECRET_KEY and the host data directories
+# user, and pulls the published container image. Does not start the
+# Drawbridge container itself — SECRET_KEY and the host data directories
 # still need setting up by hand; see the "Done" message this script prints
 # and docs/deployment.md.
 #
-# Runnable standalone (curl -fsSL .../install.sh | sudo bash) as well as from
-# a repo checkout — when kea/*.conf isn't found next to this script (piped
+# Run as your normal (non-root) user, NOT via sudo/as root - this script
+# calls sudo itself for the handful of commands that actually need root
+# (installing packages, writing /etc/kea, managing the two Kea system
+# services). Everything else (podman pull, the Quadlet unit under
+# ~/.config) runs as you, so it lands in the right place with the right
+# ownership without any extra detection/chown work. One upfront `sudo -v`
+# below gets the password prompt out of the way; individual `sudo` calls
+# after that reuse the cached credential rather than re-prompting.
+#
+# Runnable standalone (curl -fsSL .../install.sh | bash) as well as from a
+# repo checkout — when kea/*.conf isn't found next to this script (piped
 # runs have no sibling files), it and quadlet/drawbridge.container are
 # fetched from RAW_BASE into a temp dir.
 set -euo pipefail
-
-# kea-ctrl-agent's package asks a debconf question (API password) on install;
-# without a noninteractive frontend, apt-get hangs/fails waiting on a
-# terminal that isn't there for a piped `curl | sudo bash` run (or any other
-# unattended invocation). DEBIAN_FRONTEND=noninteractive answers every
-# debconf prompt with its declared default instead of showing a dialog.
-export DEBIAN_FRONTEND=noninteractive
 
 IMAGE="ghcr.io/0uwl/drawbridge:latest"
 # Pinned to this branch because kea/*.conf isn't on main yet; repoint at
@@ -45,8 +47,8 @@ else
     quadlet_src="$kea_conf_dir/drawbridge.container"
 fi
 
-if [ "$(id -u)" -ne 0 ]; then
-    echo "install.sh must be run as root (installs packages, writes /etc/kea)" >&2
+if [ "$(id -u)" -eq 0 ]; then
+    echo "install.sh should be run as your normal (non-root) user, not as root or via sudo - it calls sudo itself for the commands that need it. Re-run as: bash install.sh (or curl ... | bash)" >&2
     exit 1
 fi
 
@@ -55,10 +57,15 @@ if ! command -v apt-get >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! sudo -v; then
+    echo "install.sh needs sudo access to install packages and write system config (/etc/kea, systemd units)" >&2
+    exit 1
+fi
+
 apt_updated=0
 apt_update_once() {
     if [ "$apt_updated" -eq 0 ]; then
-        apt-get update
+        sudo apt-get update
         apt_updated=1
     fi
 }
@@ -66,7 +73,7 @@ apt_update_once() {
 if ! command -v podman >/dev/null 2>&1; then
     echo "==> Installing podman"
     apt_update_once
-    apt-get install -y podman
+    sudo apt-get install -y podman
 else
     echo "==> podman already installed ($(podman --version))"
 fi
@@ -83,8 +90,14 @@ if ! command -v kea-dhcp4 >/dev/null 2>&1; then
     # /etc/kea/kea-api-password to start regardless (see below) - that's
     # handled separately from this debconf choice, on purpose, so it isn't
     # tied to package-version-specific debconf/postinst behavior.
-    echo "kea-ctrl-agent kea-ctrl-agent/make_a_choice select unconfigured" | debconf-set-selections
-    apt-get install -y kea-dhcp4-server kea-ctrl-agent
+    echo "kea-ctrl-agent kea-ctrl-agent/make_a_choice select unconfigured" | sudo debconf-set-selections
+    # sudo resets the environment by default, so DEBIAN_FRONTEND has to be
+    # passed on the sudo command line itself (not just exported above) to
+    # actually reach apt-get - without it, apt-get would try to show the
+    # debconf question as a dialog despite the preseed above, and hang/fail
+    # with no terminal attached to answer it (a piped `curl | bash` run, or
+    # any other unattended invocation).
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-ctrl-agent
 else
     echo "==> Kea already installed ($(kea-dhcp4 -V))"
 fi
@@ -158,12 +171,12 @@ if [ -n "$interface" ] && ! ip link show "$interface" >/dev/null 2>&1; then
 fi
 
 echo "==> Installing Kea configuration"
-install -d -m 755 /etc/kea
+sudo install -d -m 755 /etc/kea
 for conf in kea-dhcp4.conf kea-ctrl-agent.conf; do
     if [ -f "/etc/kea/$conf" ] && ! cmp -s "$kea_conf_dir/$conf" "/etc/kea/$conf"; then
-        cp "/etc/kea/$conf" "/etc/kea/$conf.bak.$(date +%Y%m%d%H%M%S)"
+        sudo cp "/etc/kea/$conf" "/etc/kea/$conf.bak.$(date +%Y%m%d%H%M%S)"
     fi
-    install -m 644 "$kea_conf_dir/$conf" "/etc/kea/$conf"
+    sudo install -m 644 "$kea_conf_dir/$conf" "/etc/kea/$conf"
 done
 
 # kea-ctrl-agent's packaged systemd unit has
@@ -179,30 +192,40 @@ done
 kea_api_password_file=/etc/kea/kea-api-password
 if [ ! -s "$kea_api_password_file" ]; then
     echo "==> Generating $kea_api_password_file (required by kea-ctrl-agent's systemd unit)"
-    head -c 32 /dev/urandom | base64 | tr -d '\n' > "$kea_api_password_file"
-    chmod 0640 "$kea_api_password_file"
-    chgrp _kea "$kea_api_password_file"
+    # `sudo cmd > file` wouldn't work here - the redirection is set up by
+    # this (non-root) shell before sudo ever runs, so it can't open a
+    # root-owned path for writing. `sudo tee` does the write itself, as root.
+    head -c 32 /dev/urandom | base64 | tr -d '\n' | sudo tee "$kea_api_password_file" >/dev/null
+    sudo chmod 0640 "$kea_api_password_file"
+    sudo chgrp _kea "$kea_api_password_file"
 fi
 
 kea-dhcp4 -t /etc/kea/kea-dhcp4.conf
 kea-ctrl-agent -t /etc/kea/kea-ctrl-agent.conf
 
 echo "==> Enabling and restarting Kea services"
-systemctl enable --now "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
-systemctl restart "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
+sudo systemctl enable --now "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
+sudo systemctl restart "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
 
 echo "==> Pulling $IMAGE"
+# Deliberately not sudo'd - the Quadlet unit below runs as a rootless
+# container under your own systemd --user instance (see
+# docs/deployment.md), reading from your own rootless podman storage
+# (~/.local/share/containers/storage), not root's. A pull done as root
+# would land in root's storage instead, invisible to that user instance -
+# it'd just get re-pulled on first start anyway, making the root pull here
+# pointless as well as wrong.
 podman pull "$IMAGE"
 
-# The Quadlet unit runs as a rootless container under the invoking user's
-# own systemd --user instance (see docs/deployment.md), not root — installed
-# into that user's $HOME, not root's, even though this script itself runs as
-# root. Only written if missing so a previously-edited unit (SECRET_KEY, etc.)
-# is never clobbered by a re-run.
-target_user="${SUDO_USER:-$(id -un)}"
-target_home="$(getent passwd "$target_user" | cut -d: -f6)"
-quadlet_dir="$target_home/.config/containers/systemd"
+# The Quadlet unit runs as a rootless container under your own systemd
+# --user instance (see docs/deployment.md), installed into your own $HOME.
+# Since this script itself runs as you (not root - see the check near the
+# top), $HOME and file ownership are correct here with no extra detection
+# or chown step needed. Only written if missing so a previously-edited unit
+# (SECRET_KEY, etc.) is never clobbered by a re-run.
+quadlet_dir="$HOME/.config/containers/systemd"
 quadlet_dest="$quadlet_dir/drawbridge.container"
+mkdir -p "$quadlet_dir"
 
 if [ -f "$quadlet_dest" ] && cmp -s "$quadlet_src" "$quadlet_dest"; then
     echo "==> Quadlet unit at $quadlet_dest already matches, nothing to do"
@@ -220,16 +243,15 @@ elif [ -f "$quadlet_dest" ]; then
             echo "    Backed up existing unit to $backup"
             ;;
     esac
-    install -m 644 -o "$target_user" -g "$target_user" "$quadlet_src" "$quadlet_dest"
+    install -m 644 "$quadlet_src" "$quadlet_dest"
     echo "==> Installed Quadlet unit to $quadlet_dest — reapply any custom values (SECRET_KEY, etc.) from your backup"
 else
     echo "==> Installing Quadlet unit to $quadlet_dest"
-    install -d -m 755 -o "$target_user" -g "$target_user" "$quadlet_dir"
-    install -m 644 -o "$target_user" -g "$target_user" "$quadlet_src" "$quadlet_dest"
+    install -m 644 "$quadlet_src" "$quadlet_dest"
 fi
 
-echo "==> Done. Before starting the container as $target_user:"
+echo "==> Done. Before starting the container:"
 echo "      - edit SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) in $quadlet_dest"
-echo "      - mkdir -p $target_home/.local/share/drawbridge/{data,files}"
+echo "      - mkdir -p $HOME/.local/share/drawbridge/{data,files}"
 echo "      - systemctl --user daemon-reload && systemctl --user start drawbridge"
 echo "    See docs/deployment.md for details."

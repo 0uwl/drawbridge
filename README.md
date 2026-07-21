@@ -72,19 +72,23 @@ automatically, no extra flags needed.
 On an Ubuntu/Debian provisioning host, [install.sh](install.sh) installs
 `podman` and Kea if either is missing, installs Drawbridge's `kea/*.conf`
 into `/etc/kea`, installs the Quadlet unit to
-`~/.config/containers/systemd/drawbridge.container` for the invoking user
-(skipped if one is already there, so a previously-edited unit is never
-overwritten), and pulls `ghcr.io/0uwl/drawbridge:latest`:
+`~/.config/containers/systemd/drawbridge.container` for your user (skipped
+if one is already there, so a previously-edited unit is never overwritten),
+and pulls `ghcr.io/0uwl/drawbridge:latest`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/main/install.sh | bash
 ```
 
-Review [install.sh](install.sh) before running it. It makes system changes
-(installs packages, writes `/etc/kea`, writes the Quadlet unit) as root. It
-does not start the Drawbridge container itself — `SECRET_KEY` still needs
-setting in the installed unit and the host data directories still need
-creating; the script prints the exact commands at the end. See
+Run as your normal user, **not** as root or via `sudo` — the script calls
+`sudo` itself for the handful of steps that need root (installing
+packages, writing `/etc/kea`, managing the two Kea system services); it'll
+prompt once upfront. Everything else (the image pull, the Quadlet unit
+under `~/.config`) runs as you, so it ends up correctly owned. Review
+[install.sh](install.sh) before running it either way. It does not start
+the Drawbridge container itself — `SECRET_KEY` still needs setting in the
+installed unit and the host data directories still need creating; the
+script prints the exact commands at the end. See
 [docs/deployment.md](docs/deployment.md) for details.
 
 Equivalent from a repo checkout: `./install.sh`.

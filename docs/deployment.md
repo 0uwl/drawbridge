@@ -97,9 +97,11 @@ build:
 **Quadlet** at `~/.config/containers/systemd/drawbridge.container`, run as
 whichever user invokes it — there's no dedicated `drawbridge` system user.
 See `quadlet/drawbridge.container` in this repo. [install.sh](../install.sh)
-installs it there automatically for the invoking user (`$SUDO_USER` when run
-via `sudo`); if a unit is already present and differs, it prompts to back up
-the old one before overwriting rather than silently skipping or clobbering it.
+installs it there automatically for the user running the script (run it as
+yourself, not as root/via `sudo` — it calls `sudo` itself only for the
+steps that need it); if a unit is already present and differs, it prompts
+to back up the old one before overwriting rather than silently skipping or
+clobbering it.
 
 Drawbridge is expected to run as a rootless Podman container with the same
 permissions as the invoking user. The data directories used for the
