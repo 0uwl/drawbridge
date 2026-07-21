@@ -72,10 +72,11 @@ jobs:
           # this runner has so -t checks syntax/semantics only, not an
           # unrelated "interface doesn't exist" mismatch.
           runner_iface=$(ip -o link show | awk -F': ' '$2 != "lo" {print $2; exit}')
-          tmp_conf="$(mktemp)"
-          sed "s/\"interfaces\": \[\"[^\"]*\"\]/\"interfaces\": [\"$runner_iface\"]/" kea/kea-dhcp4.conf > "$tmp_conf"
-          kea-dhcp4 -t "$tmp_conf"
-          kea-ctrl-agent -t kea/kea-ctrl-agent.conf
+          sudo install -d -m 755 /etc/kea
+          sed "s/\"interfaces\": \[\"[^\"]*\"\]/\"interfaces\": [\"$runner_iface\"]/" kea/kea-dhcp4.conf | sudo tee /etc/kea/kea-dhcp4.conf >/dev/null
+          sudo cp kea/kea-ctrl-agent.conf /etc/kea/kea-ctrl-agent.conf
+          sudo kea-dhcp4 -t /etc/kea/kea-dhcp4.conf
+          sudo kea-ctrl-agent -t /etc/kea/kea-ctrl-agent.conf
 
   frontend:
     name: Frontend type-check
