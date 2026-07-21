@@ -58,6 +58,24 @@ jobs:
           files: '**/Containerfile'
           engine: podman
           preset: production
+      - name: Kea config syntax check
+        run: |
+          sudo apt-get update
+          # kea-ctrl-agent's package asks a debconf question on install (API
+          # password) - see install.sh for the same preseed/noninteractive
+          # handling and why "unconfigured" is the right answer here.
+          echo "kea-ctrl-agent kea-ctrl-agent/make_a_choice select unconfigured" | sudo debconf-set-selections
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-ctrl-agent
+          # kea-dhcp4.conf's "interfaces" entry is a placeholder that isn't
+          # meant to match any specific host (see install.sh, which resolves
+          # it to a real NIC at install time) - swap in whatever interface
+          # this runner has so -t checks syntax/semantics only, not an
+          # unrelated "interface doesn't exist" mismatch.
+          runner_iface=$(ip -o link show | awk -F': ' '$2 != "lo" {print $2; exit}')
+          tmp_conf="$(mktemp)"
+          sed "s/\"interfaces\": \[\"[^\"]*\"\]/\"interfaces\": [\"$runner_iface\"]/" kea/kea-dhcp4.conf > "$tmp_conf"
+          kea-dhcp4 -t "$tmp_conf"
+          kea-ctrl-agent -t kea/kea-ctrl-agent.conf
 
   frontend:
     name: Frontend type-check
