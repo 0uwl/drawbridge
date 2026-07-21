@@ -86,6 +86,74 @@ else
     echo "==> Kea already installed ($(kea-dhcp4 -V))"
 fi
 
+# kea-dhcp4.conf ships with a placeholder interface name (eth1) that won't
+# match every host - e.g. Raspberry Pi OS names its wired port eth0. Detect
+# and fix this in the local copy *before* it's installed to /etc/kea, rather
+# than installing a config nobody edited and letting kea-dhcp4-server fail
+# to start. KEA_INTERFACE overrides detection entirely, for scripted/
+# non-interactive deployments that already know the right name.
+interface=$(sed -n 's/.*"interfaces": \["\([^"]*\)"\].*/\1/p' "$kea_conf_dir/kea-dhcp4.conf" | head -n1)
+if [ -n "$interface" ] && ! ip link show "$interface" >/dev/null 2>&1; then
+    candidates=()
+    for iface_path in /sys/class/net/*; do
+        candidate="$(basename "$iface_path")"
+        # Skip loopback, wireless (ZTP provisioning is wired-only - see
+        # docs/architecture.md), and common virtual/container interfaces
+        # that also report as type 1 (ARPHRD_ETHER) but are never the
+        # intended provisioning-VLAN port.
+        [ "$candidate" = "lo" ] && continue
+        [ -e "$iface_path/wireless" ] && continue
+        [ -e "$iface_path/phy80211" ] && continue
+        [ "$(cat "$iface_path/type" 2>/dev/null)" = "1" ] || continue
+        case "$candidate" in
+            veth*|docker*|br-*|virbr*|podman*|cni*|tap*|tun*|wg*|dummy*|bond*) continue ;;
+        esac
+        candidates+=("$candidate")
+    done
+
+    if [ -n "${KEA_INTERFACE:-}" ]; then
+        resolved_interface="$KEA_INTERFACE"
+    elif [ "${#candidates[@]}" -eq 1 ]; then
+        resolved_interface="${candidates[0]}"
+        echo "==> kea-dhcp4.conf targets interface '$interface', which doesn't exist on this host - using the only Ethernet interface found: '$resolved_interface'"
+    elif [ "${#candidates[@]}" -gt 1 ] && [ -r /dev/tty ]; then
+        echo "==> kea-dhcp4.conf targets interface '$interface', which doesn't exist on this host."
+        echo "    Available Ethernet interfaces:"
+        i=1
+        for candidate in "${candidates[@]}"; do
+            echo "      $i) $candidate"
+            i=$((i + 1))
+        done
+        choice_num=""
+        read -r -p "    Which interface should kea-dhcp4-server listen on? [1-${#candidates[@]}] " choice_num < /dev/tty
+        case "$choice_num" in
+            ''|*[!0-9]*) echo "install.sh: '$choice_num' is not a valid choice" >&2; exit 1 ;;
+        esac
+        if [ "$choice_num" -lt 1 ] || [ "$choice_num" -gt "${#candidates[@]}" ]; then
+            echo "install.sh: '$choice_num' is not a valid choice" >&2
+            exit 1
+        fi
+        resolved_interface="${candidates[$((choice_num - 1))]}"
+    else
+        echo "==> ERROR: kea-dhcp4.conf targets interface '$interface', which doesn't exist on this host, and the right interface can't be determined automatically." >&2
+        if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "    No Ethernet interfaces were found on this host." >&2
+        else
+            echo "    Candidates found: ${candidates[*]}" >&2
+        fi
+        echo "    Re-run install.sh interactively to choose one, or re-run with KEA_INTERFACE=<name> set." >&2
+        exit 1
+    fi
+
+    if ! ip link show "$resolved_interface" >/dev/null 2>&1; then
+        echo "install.sh: interface '$resolved_interface' does not exist on this host" >&2
+        exit 1
+    fi
+
+    echo "==> Updating kea-dhcp4.conf: interface '$interface' -> '$resolved_interface'"
+    sed -i "s/\"interfaces\": \[\"$interface\"\]/\"interfaces\": [\"$resolved_interface\"]/" "$kea_conf_dir/kea-dhcp4.conf"
+fi
+
 echo "==> Installing Kea configuration"
 install -d -m 755 /etc/kea
 for conf in kea-dhcp4.conf kea-ctrl-agent.conf; do
@@ -94,11 +162,6 @@ for conf in kea-dhcp4.conf kea-ctrl-agent.conf; do
     fi
     install -m 644 "$kea_conf_dir/$conf" "/etc/kea/$conf"
 done
-
-interface=$(sed -n 's/.*"interfaces": \["\([^"]*\)"\].*/\1/p' "$kea_conf_dir/kea-dhcp4.conf" | head -n1)
-if [ -n "$interface" ] && ! ip link show "$interface" >/dev/null 2>&1; then
-    echo "==> WARNING: kea/kea-dhcp4.conf targets interface '$interface', which does not exist on this host — kea-dhcp4-server will fail to start until interfaces-config is updated" >&2
-fi
 
 kea-dhcp4 -t /etc/kea/kea-dhcp4.conf
 kea-ctrl-agent -t /etc/kea/kea-ctrl-agent.conf
