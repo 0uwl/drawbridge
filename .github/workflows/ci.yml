@@ -7,8 +7,41 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Anything under docs/ (or other pure-prose files) falls into neither
+      # filter, so a docs-only PR skips test/frontend/publish entirely below.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'drawbridge/**'
+              - 'tests/**'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+              - 'Containerfile'
+              - 'container/**'
+              - 'kea/**'
+              - 'quadlet/**'
+              - 'install.sh'
+              - 'README.md'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+
   test:
     name: Test
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +61,8 @@ jobs:
 
   frontend:
     name: Frontend type-check
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,8 +78,17 @@ jobs:
 
   publish:
     name: Publish container
-    needs: [test, frontend]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [changes, test, frontend]
+    # test/frontend are only skipped (not failed) when their own path filter
+    # was false - that's fine, a real failure/cancellation still blocks
+    # publish. Runs only if something that actually affects the built image
+    # (backend or frontend) changed, so a docs-only push doesn't rebuild.
+    if: >-
+      always() &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true') &&
+      needs.test.result != 'failure' && needs.test.result != 'cancelled' &&
+      needs.frontend.result != 'failure' && needs.frontend.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
       contents: read
