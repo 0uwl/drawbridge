@@ -122,7 +122,8 @@ drawbridge/
 ├── CLAUDE.md                  <- project index, links into docs/
 ├── README.md
 ├── docs/                      <- detailed design docs (this file and siblings)
-├── Containerfile              <- builds localhost/drawbridge:latest (multi-stage: builds frontend/, then the Flask image)
+├── Containerfile               <- builds localhost/drawbridge:latest (multi-stage: builds frontend/, then the Flask image)
+├── Containerfile.rsyslog       <- builds localhost/drawbridge-rsyslog:latest (Alpine + rsyslog, see logging.md)
 ├── frontend/                  <- Vue 3 + Vite admin UI, baked into drawbridge/static at build time (see frontend.md)
 │   ├── package.json
 │   ├── vite.config.js
@@ -130,8 +131,10 @@ drawbridge/
 │   └── src/
 │       ├── main.js
 │       └── App.vue
-├── quadlet/
-│   └── drawbridge.container   <- Podman Quadlet for the drawbridge user
+├── quadlet/                    <- Podman Quadlet units, one pod + two containers (see deployment.md)
+│   ├── drawbridge.pod
+│   ├── drawbridge.container
+│   └── drawbridge-rsyslog.container
 ├── kea/
 │   ├── kea-dhcp4.conf         <- Kea DHCPv4 configuration (vanilla — no hook)
 │   └── kea-ctrl-agent.conf    <- Kea Control Agent (REST API, 127.0.0.1:8081; operator diagnostics only)

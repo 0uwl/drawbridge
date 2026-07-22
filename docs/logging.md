@@ -5,59 +5,82 @@ sources — the script's own structured events, and the device's raw syslog —
 and stores both as `DeviceLogEntry` rows, viewable in the GUI filtered by
 serial. This is distinct from `ProvisioningLog` (see
 [database.md](database.md), "Log Retention & Data Minimisation"): that's a
-structured provisioning-*outcome* audit trail (one row per completed/failed
-run); this is a raw, high-volume live log feed.
+structured provisioning-*outcome* audit trail (one row per completed/failed/
+cancelled run); this is a raw, high-volume live log feed.
 
-**Decision: in-container rsyslog via s6-overlay, not a sidecar container.**
-One image to deploy/update, at the cost of adding a process supervisor to
-what was a single-process `Containerfile`. This repo has no
-pod/multi-container orchestration anywhere else, so a sidecar would have
-introduced that pattern for this one feature; in-container keeps the
-poller's DB access in-process (reusing `db.py`'s session machinery
-directly) instead of crossing a container boundary.
+**Decision: a separate `drawbridge-rsyslog` container in the same pod, not
+in-container via a process supervisor.** An earlier version ran rsyslog
+in-container under s6-overlay, specifically to avoid introducing a
+pod/multi-container pattern this repo had nowhere else. That traded away
+more than it bought: s6-overlay's own footguns (env-var stripping requiring
+`S6_KEEP_ENV=1`, opaque `/init` boot behavior, a shared "any one dies, kill
+everything" `finish` script across three unrelated processes) outweighed
+the one-image-to-deploy convenience. Splitting rsyslog into its own
+container, in a Podman pod alongside the `drawbridge` app container,
+removes the supervisor entirely: each container in the pod runs exactly one
+foreground process, and Quadlet/systemd's per-container `Restart=on-failure`
+replaces s6's job — with the added benefit that a crashed
+`drawbridge-rsyslog` container no longer takes `drawbridge` (and every live
+GUI session with it) down with it, the way one s6 service failing used to.
 
 ## Container layer
 
-`ENTRYPOINT ["/init"]` (s6-overlay) supervises three sibling `longrun`
-services, defined under `container/s6-rc.d/`:
+Pod `drawbridge` (`quadlet/drawbridge.pod`, **requires Podman 5.0+** — `.pod`
+Quadlet units and the `Pod=` key on `.container` units both landed in that
+release) contains two containers, sharing a network namespace but not a
+filesystem or container-name DNS:
 
-- **`gunicorn`** — the app itself, unchanged from before.
-- **`rsyslog`** — listens for device syslog on UDP+TCP `:10514` (see
-  `container/rsyslog-drawbridge.conf`, installed to
-  `/etc/rsyslog.d/drawbridge.conf` in the image — not some other top-level
-  `/etc` path, since the rsyslog package's own bundled AppArmor profile
-  only allows `/etc/rsyslog.conf` and `/etc/rsyslog.d/**`), writes matched
-  lines to a named pipe at `/run/rsyslog/devicelog.fifo`.
-- **`log-poller`** (`drawbridge/log_poller.py`) — tails that FIFO and
-  inserts each line as a `DeviceLogEntry` via the existing
-  `app.extensions['db_session_factory']` (the same hook `db.py`'s
-  request-scoped `get_session()` is built on, used directly here since the
-  poller isn't inside a Flask request).
+- **`drawbridge`** (`Containerfile`) — the app itself, `ENTRYPOINT`
+  running `gunicorn` directly, no supervisor.
+- **`drawbridge-rsyslog`** (`Containerfile.rsyslog`) — a separate,
+  **Alpine**-based image (`apk add rsyslog rsyslog-http` — Alpine packages
+  `omhttp`'s dependency as `rsyslog-http`; Debian/Ubuntu's rsyslog
+  packaging doesn't ship an omhttp-capable build at all), `ENTRYPOINT`
+  running `rsyslogd -n -i NONE -f /etc/rsyslog.d/drawbridge.conf` directly.
+  Listens for device syslog on UDP+TCP `:10514` (installed to
+  `/etc/rsyslog.d/drawbridge.conf` in the image, not some other top-level
+  `/etc` path — the rsyslog package's own bundled AppArmor profile only
+  allows `/etc/rsyslog.conf` and `/etc/rsyslog.d/**`).
 
-**Why :10514, not the standard :514**: 514 is a privileged port, and the
-image runs as non-root UID 1000 throughout (no `CAP_NET_BIND_SERVICE`, no
-root init phase for s6-overlay). The host side stays `:10514` too, rather
-than remapping down to the standard `:514` — see
-`quadlet/drawbridge.container`'s `PublishPort=10514:10514/udp` and `/tcp`.
+**Why :10514, not the standard :514**: 514 is a privileged port, and both
+containers run as non-root UID 1000 throughout (no `CAP_NET_BIND_SERVICE`).
+The host side stays `:10514` too, rather than remapping down to the
+standard `:514` — see `quadlet/drawbridge.pod`'s `PublishPort=`.
 Rootless Podman's `rootlessport` helper can't bind a host port below 1024
 without a host-wide sysctl change, and forcing `:514` on the host would
 also risk colliding with any other syslog daemon already listening there
 — so devices' logging destination just needs to be pointed at `:10514`
 explicitly instead of the syslog default (see the IOS-XE example below).
 
-**Why a named pipe (`ompipe`), not a plain file (`omfile`)**: a file on
-tmpfs would need the poller to also solve rotation/truncation — a real race
-against rsyslog concurrently writing. A FIFO has no backing storage: the
-kernel pipe buffer gives natural backpressure and needs zero rotation
-logic. Trade-off: if rsyslogd restarts, the poller's open read-end sees EOF
-and must reopen — handled by a plain retry loop in `log_poller.py`, not new
-machinery. No s6 ordering dependency exists between `rsyslog` and
-`log-poller` — the poller's `FileNotFoundError` retry absorbs "poller
-started before the FIFO exists," and `open()`'s blocking-until-writer
-semantics absorb "poller opened before rsyslog."
+**Why HTTP (`omhttp`), not a named pipe or a second endpoint**: pod members
+share a network namespace, so `drawbridge-rsyslog` reaches `drawbridge` at
+`https://127.0.0.1:8080` — an ordinary HTTP call, no FIFO, no poller
+process, no separate DB session to manage. `container/rsyslog-drawbridge.conf`
+POSTs every line straight to the existing `POST /api/v1/device-logs`
+endpoint — one unconditional action, no per-vendor branching in rsyslog
+config at all (see "Multi-vendor" below). The IP→serial correlation that an
+earlier in-process poller used to do lives in the `device-logs` Flask route
+itself now, which also runs each message through
+`drawbridge/device_events.py`'s `detect_state()` and updates the correlated
+session's `state` inline when it matches — no separate
+`/api/v1/device-events` endpoint, no second HTTP round-trip per event.
 
-No unit test covers the supervisor/rsyslog wiring itself (infra, not
-logic) — see [deployment.md](deployment.md) for the manual smoke test.
+`omhttp`'s TLS verification of `https://127.0.0.1:8080` needs
+`drawbridge`'s cert available to `drawbridge-rsyslog` — the pod's data
+volume is mounted read-only into the rsyslog container for exactly that
+(`quadlet/drawbridge-rsyslog.container`'s `Volume=...:/app/data:ro,Z`), and
+`drawbridge/tls.py`'s self-signed cert includes a SAN (`127.0.0.1` +
+`localhost`) so libcurl's hostname check passes against a bare loopback
+connection (a bare-CN cert, which is all older versions generated, fails
+that check even when otherwise trusted). An operator supplying their own
+real CA-issued cert (see [deployment.md](deployment.md), "TLS") needs to
+also update `container/rsyslog-drawbridge.conf`'s `tls.cacert` to point at
+that cert's issuing CA rather than the leaf cert itself, since the shipped
+default config assumes the self-signed case where the cert is its own
+trust anchor.
+
+No unit test covers the container/rsyslog wiring itself (infra, not logic)
+— see [deployment.md](deployment.md) for the manual smoke test.
 
 ## Data model
 
@@ -68,38 +91,68 @@ class DeviceLogEntry(Base):
     serial: Mapped[str | None]  # nullable — syslog may arrive before a serial is matched
     source: Mapped[str]         # 'script' | 'syslog'
     message: Mapped[str]
-    timestamp: Mapped[str] = mapped_column(default=utcnow_iso)
+    timestamp: Mapped[str] = mapped_column(default=utcnow_iso, index=True)
 ```
 
 Purged by the same `log_retention_days` `Setting` row `ProvisioningLog`
 uses, via the same lazy-purge-on-insert pattern (`queries.py`'s
 `add_device_log_entry`/`purge_expired_device_logs`) — not a second,
-independently configured retention knob.
+independently configured retention knob — but cleared immediately (ahead
+of that retention window) on a successful `provision_complete` or when the
+device is removed from the allowlist entirely. See
+[database.md](database.md), "Log Retention & Data Minimisation", for the
+full rule.
 
-**Syslog→serial correlation**: rsyslog's `dblog` template
-(`container/rsyslog-drawbridge.conf`) prefixes each line with
-`%fromhost-ip%`. `log_poller.py` looks up the active
-`ProvisioningSession` whose `ip` matches (`queries.find_active_session_by_ip`,
-a linear scan — the in-flight session table is small enough that no index
-is warranted) and stamps that session's `serial` on the row if found;
-otherwise `serial` stays `null`. Without this, syslog-sourced rows could
-never be filtered by device, defeating half the feature's stated purpose.
+**Syslog→serial correlation**: `container/rsyslog-drawbridge.conf`'s
+`deviceLogBody` template sends each line as `{"ip": "<fromhost-ip>",
+"message": "<msg>"}`. `POST /device-logs` (`drawbridge/api/device_logs.py`)
+looks up the active `ProvisioningSession` whose `ip` matches
+(`queries.find_active_session_by_ip`, a linear scan — the in-flight session
+table is small enough that no index is warranted) and stamps that
+session's `serial` on the row if found; otherwise `serial` stays `null`.
+Without this, syslog-sourced rows could never be filtered by device,
+defeating half the feature's stated purpose. Every correlated call also
+bumps that session's `last_seen_at` (see [database.md](database.md),
+"Stale sessions") — any log line at all is evidence the device is still
+alive, whether or not it also matches a state-detection trigger.
+
+## Multi-vendor
+
+State detection from syslog text lives in `drawbridge/device_events.py`, a
+plain Python module — not rsyslog config — specifically because Drawbridge
+is expected to eventually handle Juniper ZTP too: a vendor-keyed Python
+trigger table is unit-testable per vendor and keeps "which strings mean
+what state" knowledge in one reviewed/tested place, instead of sprawling
+`if`/`else if` vendor branches across an ops config that isn't code-reviewed
+or tested the same way. `detect_state()` checks each vendor's trigger tuple
+in order (Cisco IOS-XE's today; a `JUNIPER_TRIGGERS` placeholder documents
+where the next one plugs in) and returns the first matching state, or
+`None` for a routine line. Adding a new vendor touches only that one file —
+`container/rsyslog-drawbridge.conf` stays exactly as it is, since its job
+is just "forward every line as JSON," genuinely vendor-agnostic.
 
 ## API
 
-- **`GET /api/v1/device-logs?serial=<serial>`** (`drawbridge/api/device_logs.py`,
-  `@login_required`) — returns `DeviceLogEntry` rows, most recent first,
-  optionally filtered by serial. Mirrors `GET /api/v1/log`'s shape
-  (`ProvisioningLog`) but is its own route/blueprint, not a repurposing of
-  it — different model, different concern.
+- **`GET /api/v1/device-logs`** (`drawbridge/api/device_logs.py`,
+  `@login_required`) — returns `DeviceLogEntry` rows, most recent first.
+  Optional `serial` query filter. Optional `after_id` returns only rows
+  newer than the given id, for polling clients that already hold everything
+  up to that point (see "GUI" below).
 - **`POST /api/v1/device-logs`** (same file, no auth decorator — same
   posture as `leases.py`'s `provision-request`/`provision-complete`: gated
-  by a serial lookup, not caller identity) — called by the ZTP script's
-  `log_to_server()`. Body: `{"serial": "...", "message": "..."}`. `source`
-  is never client-supplied; the route always stamps `'script'`.
-  `'syslog'` rows are written directly by the poller, which already holds
-  a DB session in-process — bouncing syslog through this same HTTP
-  endpoint would be a pointless extra hop.
+  by lookup, not caller identity) — two callers, two body shapes. The ZTP
+  script's `log_to_server()` sends `{"serial": "...", "message": "..."}`,
+  stamped `source='script'`; the serial must resolve to a known `Device` or
+  `ProvisioningSession`. `drawbridge-rsyslog`'s `omhttp` action sends
+  `{"ip": "...", "message": "..."}`, stamped `source='syslog'` and
+  correlated to a session as described above — no match just means the
+  row's `serial` stays null, not a rejection. Either shape may also include
+  an explicit `state`: the script knows its own lifecycle steps (fetching a
+  config, applying it) that no syslog line would ever announce, so it can
+  declare the state directly instead of wording a message to match a
+  `device_events` trigger — must be one of `PROVISIONING_STATES`
+  (`422 invalid_state` otherwise), and skips `detect_state()` entirely when
+  present.
 
 ## Device script
 
@@ -120,4 +173,8 @@ C9200CX-dependent behavior in this file.
 `views/DeviceLogs.vue` (`stores/deviceLogs.ts`), routed at `/device-logs`,
 optionally filtered via a `?serial=` query param. Reached either directly
 or by clicking a row in `views/Sessions.vue` (the active-session join
-point).
+point). Polls `GET /device-logs` every 2s via the shared
+`composables/usePolling.ts` — the first call does a full fetch, every call
+after that uses `after_id` to fetch and prepend only what's new, so a
+long-running session's log view doesn't re-fetch and re-render its whole,
+growing history on every tick.

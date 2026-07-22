@@ -1,61 +1,23 @@
-# Reference Quadlet unit for beta.md item 8.
-#
-# install.sh installs this automatically (skipped if a unit already exists,
-# so an edited copy is never overwritten). To install by hand instead,
-# rootless as the user that will run the container:
-#   cp quadlet/drawbridge.container ~/.config/containers/systemd/drawbridge.container
-#   # fill in SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) below
-#   systemctl --user daemon-reload
-#   systemctl --user start drawbridge
-#
-# Host prep (see docs/deployment.md, "Container") — rootless, so this lives
-# under the invoking user's own XDG data dir, no sudo/chown needed:
-#   mkdir -p ~/.local/share/drawbridge/{data,files}
+# Pod member — see quadlet/drawbridge.pod for the pod-level settings
+# shared with drawbridge-rsyslog.container (PublishPort=, UserNS=) and for
+# install/host-prep instructions.
 #
 # Full description of every variable below: docs/deployment.md
 # ("Environment Variables").
 
 [Unit]
 Description=Drawbridge ZTP server
-After=network-online.target
-Wants=network-online.target
 
 [Container]
 Image=ghcr.io/0uwl/drawbridge:latest
 ContainerName=drawbridge
-
-# Required for the bind mounts below to be writable. The image runs as
-# fixed UID 1000 (drawbridge), but rootless Podman's
-# default user namespace does not map that 1:1 to the host: even when the
-# invoking host user is also UID 1000, the container sees the bind-mounted
-# directory as a different, non-writable owner. keep-id fixes the mapping
-# so container UID 1000 *is* the invoking host user for these mounts,
-# regardless of that user's real host UID.
-UserNS=keep-id:uid=1000,gid=1000
-
-# Gunicorn binds 0.0.0.0:$DRAWBRIDGE_PORT (8080 by default) and serves both
-# GUI and device-facing (ZTP phone-home/file-serving) traffic over the same
-# HTTPS listener.
-PublishPort=8080:8080
-
-# Device syslog collection (see docs/logging.md, beta.md §5). rsyslog
-# inside the container listens on unprivileged :10514, not the standard
-# :514 — 514 is a privileged port and the image runs as non-root UID 1000
-# throughout (no CAP_NET_BIND_SERVICE). Published on the host as :10514
-# too, deliberately not remapped down to the standard :514: rootless
-# Podman can't bind a host port below 1024 without a host-wide sysctl
-# change (net.ipv4.ip_unprivileged_port_start), and forcing :514 on the
-# host would also collide with any other syslog daemon already listening
-# there. Point devices' logging destination at :10514 explicitly instead
-# — see docs/logging.md.
-PublishPort=10514:10514/udp
-PublishPort=10514:10514/tcp
+Pod=drawbridge.pod
 
 # --- Required ---
 # /app/data holds the SQLite DB (unless DATABASE_PATH below points
 # at Postgres) and the auto-generated TLS cert/key under data/tls/.
 # /app/files holds uploaded images/configs/scripts served to devices.
-# %h expands to the invoking user's home directory. If this is changed, 
+# %h expands to the invoking user's home directory. If this is changed,
 # remember to change the ownership of that directory to the invoking user.
 # :Z relabels for SELinux hosts; harmless if
 # SELinux is disabled.
@@ -71,7 +33,7 @@ Environment=SECRET_KEY=CHANGE_ME_use_openssl_rand_hex_32
 
 # --- Optional---
 # Port Gunicorn binds to inside the container. Update the left side of
-# PublishPort= above to match if you change this.
+# drawbridge.pod's PublishPort= to match if you change this.
 #Environment=DRAWBRIDGE_PORT=8080
 
 # Gunicorn worker count. Ignored (forced to 1) whenever DATABASE_PATH
@@ -129,7 +91,9 @@ Environment=SECRET_KEY=CHANGE_ME_use_openssl_rand_hex_32
 # paths on first run if nothing exists there yet. Both default under
 # /app/data, so they persist via the Volume= above with no extra mount —
 # only override if you want to supply your own cert from elsewhere on the
-# host, or mount it separately.
+# host, or mount it separately. If you do supply your own, also update
+# container/rsyslog-drawbridge.conf's tls.cacert to match — it defaults to
+# assuming the self-signed cert (see docs/logging.md).
 #Environment=TLS_CERT_PATH=/app/data/tls/cert.pem
 #Environment=TLS_KEY_PATH=/app/data/tls/key.pem
 
@@ -145,6 +109,3 @@ Tmpfs=/run
 
 [Service]
 Restart=on-failure
-
-[Install]
-WantedBy=default.target

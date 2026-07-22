@@ -1,0 +1,58 @@
+# Owns the shared network namespace and published ports for both
+# containers in the pod (quadlet/drawbridge.container,
+# quadlet/drawbridge-rsyslog.container) — Podman 5.0+ required for .pod
+# Quadlet unit support (the Pod= key on .container units, and this file's
+# own generation, both landed in 5.0; older Podman fails with "unsupported
+# key 'Pod' in group 'Container'").
+#
+# install.sh installs this automatically alongside the other two unit
+# files (skipped if a unit already exists, so an edited copy is never
+# overwritten). To install by hand instead, rootless as the user that will
+# run the containers:
+#   cp quadlet/drawbridge.pod quadlet/drawbridge.container quadlet/drawbridge-rsyslog.container ~/.config/containers/systemd/
+#   # fill in SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) in drawbridge.container
+#   systemctl --user daemon-reload
+#   systemctl --user start drawbridge-pod.service
+#
+# Host prep (see docs/deployment.md, "Container") — rootless, so this lives
+# under the invoking user's own XDG data dir, no sudo/chown needed:
+#   mkdir -p ~/.local/share/drawbridge/{data,files}
+
+[Unit]
+Description=Drawbridge ZTP server pod
+After=network-online.target
+Wants=network-online.target
+
+[Pod]
+PodName=drawbridge
+
+# Gunicorn (in the drawbridge container) binds 0.0.0.0:$DRAWBRIDGE_PORT
+# (8080 by default) and serves both GUI and device-facing (ZTP
+# phone-home/file-serving) traffic over the same HTTPS listener.
+PublishPort=8080:8080
+
+# Device syslog collection (see docs/logging.md), handled by the
+# drawbridge-rsyslog container. It listens on unprivileged :10514, not the
+# standard :514 — 514 is a privileged port and both containers in this pod
+# run non-root throughout (no CAP_NET_BIND_SERVICE). Published on the host
+# as :10514 too, deliberately not remapped down to the standard :514:
+# rootless Podman can't bind a host port below 1024 without a host-wide
+# sysctl change, and forcing :514 on the host would also collide with any
+# other syslog daemon already listening there. Point devices' logging
+# destination at :10514 explicitly instead — see docs/logging.md.
+PublishPort=10514:10514/udp
+PublishPort=10514:10514/tcp
+
+# Required for the bind mounts (declared on the member .container units)
+# to be writable. Both images run as fixed UID 1000, but rootless Podman's
+# default user namespace does not map that 1:1 to the host: even when the
+# invoking host user is also UID 1000, the containers see the bind-mounted
+# directory as a different, non-writable owner. keep-id fixes the mapping
+# so container UID 1000 *is* the invoking host user for these mounts,
+# regardless of that user's real host UID. Set once here, not per
+# container — pod members share a network namespace, and Podman requires
+# this to be consistent across them anyway.
+UserNS=keep-id:uid=1000,gid=1000
+
+[Install]
+WantedBy=default.target

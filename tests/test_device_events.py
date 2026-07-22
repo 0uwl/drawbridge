@@ -1,5 +1,5 @@
 """Unit tests for device_events.detect_state — pure logic, no Flask/DB
-fixtures needed, same split test_log_poller.py used for _handle_line."""
+fixtures needed."""
 from drawbridge.device_events import detect_state
 
 
