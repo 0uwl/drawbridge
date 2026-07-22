@@ -102,10 +102,21 @@ Environment=SECRET_KEY=CHANGE_ME_use_openssl_rand_hex_32
 #Environment=TLS_DISABLED=1
 
 # Matches the Containerfile's runtime expectations (docs/deployment.md,
-# "Container"): app only ever writes under /app/data, /app/files, /tmp, /run.
+# "Container"): app only ever writes under /app/data, /app/files, /tmp,
+# /run, and $HOME. The last of those is Gunicorn's own control-socket
+# feature (~/.gunicorn/gunicorn.ctl by default, unconfigured — see
+# gunicorn.conf.py) — without it, startup fails with "Read-only file
+# system" (non-fatal — the actual HTTP(S) listener isn't affected — but
+# real, caught by an actual ReadOnly=true pod run, not just podman build).
+# mode=1777 is required, not optional: a bare Tmpfs= mount here inherits
+# /home/drawbridge's existing image mode (0700, root-owned, from useradd
+# --create-home) rather than tmpfs's own usual 1777 default the way a
+# not-already-existing path like /tmp gets — without an explicit mode,
+# gunicorn (UID 1000) still can't write into its own tmpfs'd home dir.
 ReadOnly=true
 Tmpfs=/tmp
 Tmpfs=/run
+Tmpfs=/home/drawbridge:mode=1777
 
 [Service]
 Restart=on-failure

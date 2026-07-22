@@ -82,7 +82,10 @@ build:
     drawbridge/gunicorn.conf.py` — Gunicorn does not discover a config file
     nested under a subdirectory on its own)
   - `/app/data` and `/app/files` are mount points — do not COPY content there
-  - Root filesystem is read-only at runtime; `/tmp` and `/run` are tmpfs
+  - Root filesystem is read-only at runtime; `/tmp`, `/run`, and
+    `/home/drawbridge` are tmpfs — the last of those is for Gunicorn's own
+    control-socket file (`~/.gunicorn/gunicorn.ctl`, unconfigured — see
+    `gunicorn.conf.py`), not application data
 
 **`Containerfile.rsyslog`** builds `localhost/drawbridge-rsyslog:latest` —
 a separate, single-stage Alpine image (`apk add rsyslog rsyslog-http`),
@@ -101,8 +104,8 @@ invokes it — there's no dedicated `drawbridge` system user:
   the same `Volume=`/`Environment=`/`ReadOnly=true`/`Tmpfs=` as before the
   pod split.
 - `quadlet/drawbridge-rsyslog.container` — the syslog collector,
-  `Pod=drawbridge.pod`, read-only mount of the data volume (just for
-  Drawbridge's TLS cert, see [logging.md](logging.md)), `Restart=on-failure`
+  `Pod=drawbridge.pod`, no volume mount at all (see [logging.md](logging.md)
+  for why it doesn't need Drawbridge's TLS cert), `Restart=on-failure`
   independent of the app container — a crashed `drawbridge-rsyslog` no
   longer takes `drawbridge` down with it, unlike the old single-container/
   s6 setup.
@@ -142,10 +145,12 @@ ACME-issued cert, or a shared org CA) has it used as-is — nothing is
 overwritten if the files are already present.
 
 The generated cert includes a SAN (`127.0.0.1` + `localhost`), needed so the
-`drawbridge-rsyslog` container's `omhttp` action can verify Drawbridge's
-cert when it connects to `https://127.0.0.1:8080` inside the pod's shared
-network namespace — a bare-CN cert fails libcurl's hostname check even when
-otherwise trusted. **Upgrading from a pre-pod install:** delete
+`drawbridge-rsyslog` container's `omhttp` action passes libcurl's hostname
+check when it connects to `https://127.0.0.1:8080` inside the pod's shared
+network namespace — a bare-CN cert fails that check even when otherwise
+trusted. (CA-chain validation itself is intentionally skipped for this one
+connection — see [logging.md](logging.md) — but hostname verification
+stays on.) **Upgrading from a pre-pod install:** delete
 `data/tls/cert.pem` and `data/tls/key.pem` so `ensure_cert()` regenerates
 them with the SAN on next start; an existing no-SAN cert is not replaced
 automatically.

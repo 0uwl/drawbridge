@@ -65,19 +65,21 @@ itself now, which also runs each message through
 session's `state` inline when it matches — no separate
 `/api/v1/device-events` endpoint, no second HTTP round-trip per event.
 
-`omhttp`'s TLS verification of `https://127.0.0.1:8080` needs
-`drawbridge`'s cert available to `drawbridge-rsyslog` — the pod's data
-volume is mounted read-only into the rsyslog container for exactly that
-(`quadlet/drawbridge-rsyslog.container`'s `Volume=...:/app/data:ro,Z`), and
-`drawbridge/tls.py`'s self-signed cert includes a SAN (`127.0.0.1` +
-`localhost`) so libcurl's hostname check passes against a bare loopback
-connection (a bare-CN cert, which is all older versions generated, fails
-that check even when otherwise trusted). An operator supplying their own
-real CA-issued cert (see [deployment.md](deployment.md), "TLS") needs to
-also update `container/rsyslog-drawbridge.conf`'s `tls.cacert` to point at
-that cert's issuing CA rather than the leaf cert itself, since the shipped
-default config assumes the self-signed case where the cert is its own
-trust anchor.
+The `omhttp` action connects with `usehttps="on"` but `allowunsignedcerts="on"`
+(curl's `CURLOPT_SSL_VERIFYPEER=0`) instead of a `tls.cacert` — it skips
+CA-chain validation entirely rather than pointing at Drawbridge's cert, so
+`drawbridge-rsyslog` doesn't need that cert (or any volume mount at all —
+see `quadlet/drawbridge-rsyslog.container`). rsyslog's own docs call
+`allowunsignedcerts` "strongly discouraged... primarily useful only for
+debugging or testing," which holds for a real network path, but doesn't
+apply here: this connection never leaves the pod's shared loopback network
+namespace, so there's no position an attacker could occupy to MITM it.
+Hostname verification stays on regardless (not disabled via
+`skipverifyhost`) — `drawbridge/tls.py`'s self-signed cert includes a SAN
+(`127.0.0.1` + `localhost`) so that check passes against the cert received
+over the connection itself, no local file needed either way (a bare-CN
+cert, which is all older versions generated, fails that check even when
+otherwise trusted).
 
 No unit test covers the container/rsyslog wiring itself (infra, not logic)
 — see [deployment.md](deployment.md) for the manual smoke test.
