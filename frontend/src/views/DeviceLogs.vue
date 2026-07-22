@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDeviceLogsStore } from '../stores/deviceLogs'
 import { formatTimestamp } from '../utils/format'
+import { usePolling } from '../composables/usePolling'
 
 const route = useRoute()
 const deviceLogs = useDeviceLogsStore()
 const serial = typeof route.query.serial === 'string' ? route.query.serial : undefined
-onMounted(() => deviceLogs.fetchDeviceLogs(serial))
+deviceLogs.setSerial(serial)
+usePolling(() => deviceLogs.poll(), 2000)
 </script>
 
 <template>

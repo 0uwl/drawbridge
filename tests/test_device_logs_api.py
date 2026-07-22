@@ -59,6 +59,20 @@ def test_get_device_logs_filters_by_serial(app, logged_in_client):
     assert payload[0]['serial'] == 'SN1'
 
 
+def test_get_device_logs_after_id_returns_only_newer_rows(app, logged_in_client):
+    with app.app_context():
+        session = get_session()
+        first = add_device_log_entry(session, serial='SN1', source='script', message='a')
+        session.commit()
+        second = add_device_log_entry(session, serial='SN1', source='script', message='b')
+        session.commit()
+        first_id = first.id
+
+    response = logged_in_client.get(f'{BASE}/device-logs', query_string={'after_id': first_id})
+    payload = response.get_json()['payload']
+    assert [e['id'] for e in payload] == [second.id]
+
+
 # POST /api/v1/device-logs
 
 def test_post_device_log_known_device_persists_row(client, app, device):

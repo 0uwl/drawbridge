@@ -26,7 +26,8 @@ def create_blueprint():
     def get_device_logs():
         session = get_session()
         serial = request.args.get('serial')
-        entries = list_device_logs(session, serial=serial)
+        after_id = request.args.get('after_id', type=int)
+        entries = list_device_logs(session, serial=serial, after_id=after_id)
         return success_response('Returned device logs', payload=[e.as_dict() for e in entries], level=logging.DEBUG)
 
     @bp.post('/device-logs')

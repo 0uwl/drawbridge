@@ -401,6 +401,23 @@ def test_list_device_logs_filters_by_serial(session):
     assert filtered[0].message == 'a'
 
 
+def test_list_device_logs_after_id_returns_only_newer_rows(session):
+    first = queries.add_device_log_entry(session, serial='SN1', source='script', message='a')
+    session.commit()
+    second = queries.add_device_log_entry(session, serial='SN1', source='script', message='b')
+    session.commit()
+
+    newer = queries.list_device_logs(session, after_id=first.id)
+    assert [e.id for e in newer] == [second.id]
+
+
+def test_list_device_logs_after_id_returns_empty_when_nothing_newer(session):
+    entry = queries.add_device_log_entry(session, serial='SN1', source='script', message='a')
+    session.commit()
+
+    assert queries.list_device_logs(session, after_id=entry.id) == []
+
+
 def test_purge_expired_device_logs_removes_rows_older_than_retention(session):
     old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(timespec='microseconds')
     session.add(DeviceLogEntry(serial='SN1', source='syslog', message='old', timestamp=old_ts))

@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { useSessionsStore } from '../stores/sessions'
 import DeviceTabs from '../components/DeviceTabs.vue'
 import { formatTimestamp } from '../utils/format'
 import { stateBadgeClass, formatStateLabel } from '../utils/provisioningStates'
+import { usePolling } from '../composables/usePolling'
 
 const sessions = useSessionsStore()
-onMounted(() => sessions.list())
+usePolling(() => sessions.list(), 4000)
 
 const pendingCancel = ref<string | null>(null)
 

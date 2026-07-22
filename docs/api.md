@@ -49,7 +49,7 @@ All `/api/*` paths below are versioned — `API_PREFIX` in `main.py` is
 | DELETE | `/api/v1/users/<id>` | Remove an operator account, no password confirmation required (admin only) |
 | GET | `/api/v1/settings/log-retention` | Current log retention setting (days, or indefinite) |
 | PUT | `/api/v1/settings/log-retention` | Update log retention setting (admin only) |
-| GET | `/api/v1/device-logs` | List raw device log entries (auth required); optional `serial` query filter |
+| GET | `/api/v1/device-logs` | List raw device log entries (auth required); optional `serial` query filter. Optional `after_id` returns only rows with `id` greater than the given value, newest first, same as without it — for polling clients that already hold everything up to that id and want just what's new, instead of re-fetching the whole (potentially long) list every poll |
 | POST | `/api/v1/device-logs` | Append a raw device log entry. Two body shapes: `{serial, message}` (the ZTP script's `log_to_server()`, `source='script'`) or `{ip, message}` (rsyslog's `omhttp` action, `source='syslog'`, IP best-effort correlated to a `ProvisioningSession` via `find_active_session_by_ip`). Either shape may also include an optional `state`: if given, it must be one of `PROVISIONING_STATES` (`422 invalid_state` otherwise) and is applied directly to the correlated session, skipping pattern matching entirely; without it, `message` is run through `drawbridge/device_events.py`'s `detect_state()` instead — see [logging.md](logging.md) |
 
 Every `/api/devices`, `/api/log`, `/api/users`, `/api/settings/*`, and

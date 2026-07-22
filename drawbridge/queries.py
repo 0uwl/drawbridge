@@ -379,10 +379,15 @@ def add_device_log_entry(
     return entry
 
 
-def list_device_logs(session: Session, serial: str | None = None) -> list[DeviceLogEntry]:
+def list_device_logs(session: Session, serial: str | None = None, after_id: int | None = None) -> list[DeviceLogEntry]:
+    """after_id lets a poller fetch only rows newer than the last one it
+    already has, instead of re-fetching (and the frontend re-rendering) the
+    whole growing list on every poll — see docs/api.md."""
     stmt = select(DeviceLogEntry).order_by(DeviceLogEntry.timestamp.desc())
     if serial is not None:
         stmt = stmt.where(DeviceLogEntry.serial == serial)
+    if after_id is not None:
+        stmt = stmt.where(DeviceLogEntry.id > after_id)
     return list(session.scalars(stmt).all())
 
 
