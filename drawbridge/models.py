@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask_login import UserMixin
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -44,10 +44,23 @@ class Device(Base):
         }
 
 
+PROVISIONING_STATES = frozenset({
+    'lease_approved', 'script_fetched', 'downloading',
+    'updating_software', 'rebooting', 'configuring', 'error',
+})
+
+# A safety margin against a stuck session (device crashed/pulled mid-install),
+# not an operator-tunable policy like log_retention_days — no per-site
+# variability rationale for making this a Setting, so it stays a constant
+# until something actually needs it configurable. See v0-3-0.md, "Addendum".
+SESSION_STALE_AFTER_MINUTES = 60
+
+
 class ProvisioningSession(Base):
     """Transient record of an in-progress ZTP run. Created when
     /api/v1/provision-request approves a serial; deleted when
-    /api/v1/provision-complete fires (success or failure). The Device
+    /api/v1/provision-complete fires (success or failure), or when an
+    operator cancels a stale session (see is_stale() below). The Device
     allowlist row is not touched."""
     __tablename__ = 'provisioning_sessions'
 
@@ -56,9 +69,17 @@ class ProvisioningSession(Base):
     ip: Mapped[str | None]
     image: Mapped[str | None]        # copied from the Device row's assignment at approval time
     config_file: Mapped[str | None]  # copied from the Device row's assignment at approval time
-    state: Mapped[str]               # 'lease_approved', 'script_fetched', 'downloading',
-                                     # 'updating_software', 'rebooting', 'configuring'
+    state: Mapped[str]               # one of PROVISIONING_STATES above
     approved_at: Mapped[str] = mapped_column(default=utcnow_iso)
+    # Distinct from approved_at (set once, at creation): bumped on every
+    # repeat /provision-request call and every correlated /device-logs POST,
+    # so a long-running-but-active install doesn't look stale just because
+    # it was approved over an hour ago.
+    last_seen_at: Mapped[str] = mapped_column(default=utcnow_iso)
+
+    def is_stale(self) -> bool:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=SESSION_STALE_AFTER_MINUTES)).isoformat(timespec='microseconds')
+        return self.last_seen_at < cutoff
 
     def as_dict(self) -> dict:
         return {
@@ -69,6 +90,8 @@ class ProvisioningSession(Base):
             'config_file': self.config_file,
             'state': self.state,
             'approved_at': self.approved_at,
+            'last_seen_at': self.last_seen_at,
+            'stale': self.is_stale(),
         }
 
 
@@ -84,7 +107,7 @@ class ProvisioningLog(Base):
     image: Mapped[str | None]
     config_file: Mapped[str | None]
     ip: Mapped[str | None]
-    timestamp: Mapped[str] = mapped_column(default=utcnow_iso)
+    timestamp: Mapped[str] = mapped_column(default=utcnow_iso, index=True)  # purge_expired_logs range-scans this
     detail: Mapped[str | None]
 
     def as_dict(self) -> dict:
@@ -112,7 +135,7 @@ class DeviceLogEntry(Base):
     serial: Mapped[str | None]  # nullable — syslog may arrive before a serial is matched
     source: Mapped[str]         # 'script' | 'syslog'
     message: Mapped[str]
-    timestamp: Mapped[str] = mapped_column(default=utcnow_iso)
+    timestamp: Mapped[str] = mapped_column(default=utcnow_iso, index=True)  # purge_expired_device_logs range-scans this
 
     def as_dict(self) -> dict:
         return {

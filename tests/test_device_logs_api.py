@@ -115,3 +115,87 @@ def test_post_device_log_does_not_require_login(client, device):
     provision-complete: gated by serial lookup, not caller identity."""
     response = client.post(f'{BASE}/device-logs', json={'serial': device.serial, 'message': 'hi'})
     assert response.status_code == 200
+
+
+# POST /api/v1/device-logs — {ip, message} shape (rsyslog's omhttp action)
+
+def test_post_device_log_known_ip_correlates_serial(client, app, active_session):
+    response = client.post(f'{BASE}/device-logs', json={'ip': active_session.ip, 'message': '%LINK-3-UPDOWN: up'})
+    assert response.status_code == 200
+
+    with app.app_context():
+        from drawbridge.models import DeviceLogEntry
+        rows = get_session().query(DeviceLogEntry).all()
+    assert len(rows) == 1
+    assert rows[0].serial == active_session.serial
+    assert rows[0].source == 'syslog'
+
+
+def test_post_device_log_unknown_ip_persists_null_serial(client, app):
+    response = client.post(f'{BASE}/device-logs', json={'ip': '10.0.0.99', 'message': 'no session for this ip'})
+    assert response.status_code == 200
+
+    with app.app_context():
+        from drawbridge.models import DeviceLogEntry
+        rows = get_session().query(DeviceLogEntry).all()
+    assert len(rows) == 1
+    assert rows[0].serial is None
+    assert rows[0].source == 'syslog'
+
+
+# POST /api/v1/device-logs — device_events state detection side effect
+
+def test_post_device_log_trigger_message_updates_session_state(client, app, active_session):
+    response = client.post(
+        f'{BASE}/device-logs',
+        json={'ip': active_session.ip, 'message': '%INSTALL-5-INSTALL_COMPLETED_INFO: Completed install activate'},
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        from drawbridge.queries import get_provisioning_session
+        ps = get_provisioning_session(get_session(), active_session.serial)
+    assert ps.state == 'rebooting'
+
+
+# POST /api/v1/device-logs — explicit `state` field (script-declared, bypasses detect_state)
+
+def test_post_device_log_explicit_state_updates_session(client, app, active_session):
+    response = client.post(
+        f'{BASE}/device-logs',
+        json={'serial': active_session.serial, 'message': 'fetching config from server', 'state': 'downloading'},
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        from drawbridge.queries import get_provisioning_session
+        ps = get_provisioning_session(get_session(), active_session.serial)
+    assert ps.state == 'downloading'
+
+
+def test_post_device_log_explicit_state_skips_pattern_matching(client, app, active_session):
+    """A message that would otherwise trigger 'rebooting' via keyword match
+    is ignored once an explicit state is given — detect_state() never runs."""
+    response = client.post(
+        f'{BASE}/device-logs',
+        json={
+            'serial': active_session.serial,
+            'message': 'Completed install activate',
+            'state': 'configuring',
+        },
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        from drawbridge.queries import get_provisioning_session
+        ps = get_provisioning_session(get_session(), active_session.serial)
+    assert ps.state == 'configuring'
+
+
+def test_post_device_log_invalid_explicit_state_returns_422(client, device):
+    response = client.post(
+        f'{BASE}/device-logs',
+        json={'serial': device.serial, 'message': 'hi', 'state': 'not_a_real_state'},
+    )
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'invalid_state'

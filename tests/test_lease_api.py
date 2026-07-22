@@ -4,7 +4,7 @@ import pytest
 
 from drawbridge import create_app
 from drawbridge.db import get_session
-from drawbridge.models import Device, ProvisioningLog, ProvisioningSession
+from drawbridge.models import Device, DeviceLogEntry, ProvisioningLog, ProvisioningSession
 
 BASE = '/api/v1'
 
@@ -201,6 +201,40 @@ def test_provision_complete_missing_serial_returns_422(client):
 
     assert response.status_code == 422
     assert response.get_json()['error'] == 'missing_parameter'
+
+
+# DeviceLogEntry cleanup on completion — see docs/database.md, "Log
+# Retention & Data Minimisation"
+
+def test_provision_complete_success_clears_device_logs(client, app, active_session):
+    with app.app_context():
+        session = get_session()
+        session.add(DeviceLogEntry(serial=active_session.serial, source='script', message='provisioning started'))
+        session.commit()
+
+    response = client.put(f'{BASE}/provision-complete', json={'serial': active_session.serial})
+    assert response.status_code == 200
+
+    with app.app_context():
+        remaining = get_session().query(DeviceLogEntry).filter_by(serial=active_session.serial).all()
+    assert remaining == []
+
+
+def test_provision_complete_failure_keeps_device_logs(client, app, active_session):
+    with app.app_context():
+        session = get_session()
+        session.add(DeviceLogEntry(serial=active_session.serial, source='script', message='provisioning started'))
+        session.commit()
+
+    response = client.put(
+        f'{BASE}/provision-complete',
+        json={'serial': active_session.serial, 'event': 'provision_failed'},
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        remaining = get_session().query(DeviceLogEntry).filter_by(serial=active_session.serial).all()
+    assert len(remaining) == 1
 
 
 # Steady-state concurrency

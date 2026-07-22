@@ -30,8 +30,9 @@ class Device(Base):
 class ProvisioningSession(Base):
     """Transient record of an in-progress ZTP run. Created when
     /api/provision-request approves a serial; deleted when
-    /api/provision-complete fires (success or failure). The Device
-    allowlist row is not touched."""
+    /api/provision-complete fires (success or failure), or when an operator
+    cancels a stale session (is_stale(), see below). The Device allowlist
+    row is not touched."""
     __tablename__ = 'provisioning_sessions'
 
     serial: Mapped[str] = mapped_column(primary_key=True)
@@ -40,8 +41,10 @@ class ProvisioningSession(Base):
     image: Mapped[str | None]        # copied from the Device row's assignment at approval time
     config_file: Mapped[str | None]  # copied from the Device row's assignment at approval time
     state: Mapped[str]               # 'lease_approved', 'script_fetched', 'downloading',
-                                     # 'updating_software', 'rebooting', 'configuring'
+                                     # 'updating_software', 'rebooting', 'configuring', 'error'
     approved_at: Mapped[str]
+    last_seen_at: Mapped[str]        # bumped on every repeat provision-request and every
+                                     # correlated /device-logs POST — see "Stale sessions" below
 
 
 class ProvisioningLog(Base):
@@ -116,6 +119,53 @@ for why those three sources aren't treated the same.
 A request-scoped session is opened per Flask request (e.g. via
 `app.teardown_appcontext`) and closed/rolled back at the end of the request.
 
+## Stale sessions
+
+A `ProvisioningSession` only ever gets deleted by the device itself calling
+`/api/v1/provision-complete` — nothing times it out automatically. A device
+that crashes, loses power, or is physically pulled mid-install leaves its
+session (and therefore its `devices` allowlist entry, since `DELETE
+/devices/<serial>` refuses to remove a device with an active session)
+permanently stuck with no self-healing path.
+
+Drawbridge deliberately does **not** auto-expire sessions in the
+background. `ProvisioningSession.is_stale()` (`SESSION_STALE_AFTER_MINUTES`,
+default 60) is only ever used to *gate* an operator-initiated cancel
+(`DELETE /api/v1/devices/sessions/<serial>`, `409 session_not_stale` while
+still within the window) — never to delete a session on its own. Silently
+reaping a session that's still genuinely active (a false positive on the
+timeout) would be worse than the stuck-device annoyance it fixes: the
+device's own `/provision-complete` call would then 404
+(`device_not_active`), and Drawbridge would have no `ProvisioningLog` row
+for what actually happened, since that write only happens inside the
+handler that just rejected the call. An operator-initiated cancel writes a
+`ProvisioningLog` row (`event='provision_cancelled'`) before deleting the
+session, so the outcome is never lost the way a silent auto-expiry's would
+be.
+
+A cancelled session's `DeviceLogEntry` rows are **not** cleared — treated
+the same as a failure, not a success (see "Log Retention & Data
+Minimisation" below): those are exactly the logs an operator investigating
+"why did this get stuck" would want.
+
+## Schema evolution
+
+There's no migration framework (no Alembic, no versioned migration
+scripts) — `init_db()` calls `Base.metadata.create_all()`, which creates
+whatever tables don't exist yet and stops there. That's sufficient for new
+tables, but SQLAlchemy's `create_all()` does *not* retroactively add a
+newly-declared index to a table that already exists — an already-deployed
+install would silently never get it. `drawbridge/db.py`'s `_sync_indexes()`
+closes that specific gap: right after `create_all()`, inside the same
+cross-process bootstrap lock, it explicitly (re)creates every index
+declared on the models with `checkfirst=True`, so an upgrade picks up
+index changes without needing a fresh install. This covers index
+additions only — `DeviceLogEntry.timestamp` and `ProvisioningLog.timestamp`
+are both indexed today, supporting the lazy-purge queries below, which
+would otherwise be full table scans on every single insert. Column
+additions/type changes are a different, harder problem this doesn't
+attempt to solve; none exist yet.
+
 ## Concurrency under multiple Gunicorn workers
 
 Drawbridge supports two database backends (`DATABASE_PATH`, see above).
@@ -178,10 +228,11 @@ Drawbridge is not an inventory system in spirit, though the `Device`
 allowlist row itself persists until an operator explicitly deletes it (see
 the `Device` docstring above). What's transient is the `ProvisioningSession`,
 deleted as soon as `/api/provision-complete` fires (see
-[architecture.md](architecture.md), DHCP Flow). What persists past that
-point is `ProvisioningLog`: when a device was provisioned and what
-image/config file it received, for audit and troubleshooting, not asset
-tracking.
+[architecture.md](architecture.md), DHCP Flow) — or, for a stuck session,
+via an operator's explicit cancel once it's stale (see "Stale sessions"
+above). What persists past that point is `ProvisioningLog`: when a device
+was provisioned and what image/config file it received, for audit and
+troubleshooting, not asset tracking.
 
 - Retention is controlled by the `Setting` row keyed `log_retention_days` —
   an **admin-configurable, DB-backed setting** via `GET`/`PUT
@@ -200,9 +251,22 @@ tracking.
   preference for minimal moving parts — the tradeoff is that on a
   long-idle deployment, expired rows linger until the next provisioning
   event, which is acceptable for a log, not a security control.
-- Only `provision_complete` and `provision_failed` events land in
-  `ProvisioningLog` — lease decisions are not logged. The retention rule
-  covers all device-identifying archival data.
-- `DeviceLogEntry` (see [logging.md](logging.md)) is purged by the same
-  `log_retention_days` setting and the same lazy-purge-on-insert pattern —
-  not a second, independently configured retention knob.
+- `provision_complete`, `provision_failed`, and `provision_cancelled`
+  (an operator cancelling a stale session — see "Stale sessions" above)
+  events land in `ProvisioningLog` — lease decisions are not logged. The
+  retention rule covers all device-identifying archival data.
+- `DeviceLogEntry` (see [logging.md](logging.md)) shares the same
+  `log_retention_days` setting — not a second, independently configured
+  retention knob — but isn't purely time-based like `ProvisioningLog`:
+  a device's raw log stream is only useful for watching that specific run
+  in progress, so on a **successful** `provision_complete`
+  (`drawbridge/api/leases.py`) its `DeviceLogEntry` rows are deleted
+  immediately, regardless of `log_retention_days`. A **failed** or
+  **cancelled** run's rows are left in place — still troubleshooting-relevant
+  — and age out via the same lazy-purge-on-insert pattern as everything
+  else, until a later successful completion for that serial clears them,
+  `log_retention_days` catches up with them first, or the device is removed
+  from the allowlist entirely (`DELETE /api/v1/devices/<serial>` also clears
+  that serial's `DeviceLogEntry` rows unconditionally — a device that's no
+  longer allowlisted has nothing left for Drawbridge to track except its
+  `ProvisioningLog` history).

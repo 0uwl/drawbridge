@@ -198,6 +198,19 @@ def test_create_provisioning_session_fills_in_previously_unknown_mac(session):
     assert ps.mac == 'aa:bb'
 
 
+def test_create_provisioning_session_repeat_call_bumps_last_seen_at(session):
+    queries.add_device(session, serial='SN1')
+    ps = queries.create_provisioning_session(session, serial='SN1', ip='10.0.0.1')
+    session.commit()
+    ps.last_seen_at = '2000-01-01T00:00:00.000000+00:00'
+    session.commit()
+
+    queries.create_provisioning_session(session, serial='SN1', ip='10.0.0.1')
+    session.commit()
+
+    assert ps.last_seen_at > '2000-01-01T00:00:00.000000+00:00'
+
+
 def test_delete_provisioning_session(session):
     queries.add_device(session, serial='SN1')
     queries.create_provisioning_session(session, serial='SN1')
@@ -225,6 +238,24 @@ def test_find_active_session_by_ip_returns_none_when_no_match(session):
     session.commit()
 
     assert queries.find_active_session_by_ip(session, '10.0.0.99') is None
+
+
+def test_touch_session_bumps_last_seen_at(session):
+    queries.add_device(session, serial='SN1')
+    ps = queries.create_provisioning_session(session, serial='SN1')
+    session.commit()
+    ps.last_seen_at = '2000-01-01T00:00:00.000000+00:00'
+    session.commit()
+
+    queries.touch_session(session, serial='SN1')
+    session.commit()
+
+    assert ps.last_seen_at > '2000-01-01T00:00:00.000000+00:00'
+
+
+def test_touch_session_is_a_noop_when_no_session_exists(session):
+    queries.touch_session(session, serial='UNKNOWN')  # must not raise
+    session.commit()
 
 
 # User queries
@@ -404,3 +435,29 @@ def test_add_device_log_entry_purges_expired_rows_before_inserting(session):
     rows = session.query(DeviceLogEntry).all()
     assert len(rows) == 1
     assert rows[0].message == 'new'
+
+
+def test_delete_device_logs_by_serial_removes_all_rows_regardless_of_age(session):
+    fresh_ts = datetime.now(timezone.utc).isoformat(timespec='microseconds')
+    session.add(DeviceLogEntry(serial='SN1', source='syslog', message='new', timestamp=fresh_ts))
+    session.commit()
+    # No retention setting purge involved here — this deletes unconditionally,
+    # regardless of log_retention_days, unlike purge_expired_device_logs above.
+
+    queries.delete_device_logs_by_serial(session, 'SN1')
+    session.commit()
+
+    assert session.query(DeviceLogEntry).count() == 0
+
+
+def test_delete_device_logs_by_serial_leaves_other_serials_alone(session):
+    queries.add_device_log_entry(session, serial='SN1', source='syslog', message='a')
+    queries.add_device_log_entry(session, serial='SN2', source='syslog', message='b')
+    session.commit()
+
+    queries.delete_device_logs_by_serial(session, 'SN1')
+    session.commit()
+
+    remaining = session.query(DeviceLogEntry).all()
+    assert len(remaining) == 1
+    assert remaining[0].serial == 'SN2'

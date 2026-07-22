@@ -1,7 +1,9 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from drawbridge.db import get_session
-from drawbridge.models import Device, ProvisioningSession, Setting
+from drawbridge.models import Device, DeviceLogEntry, ProvisioningLog, ProvisioningSession, SESSION_STALE_AFTER_MINUTES, Setting
 
 BASE = '/api/v1'
 
@@ -30,6 +32,23 @@ def active_session(app, device):
             mac=device.mac,
             ip='10.0.0.5',
             state='lease_approved',
+        )
+        session.add(ps)
+        session.commit()
+    return ps
+
+
+@pytest.fixture()
+def stale_session(app, device):
+    with app.app_context():
+        session = get_session()
+        last_seen = (datetime.now(timezone.utc) - timedelta(minutes=SESSION_STALE_AFTER_MINUTES + 1)).isoformat(timespec='microseconds')
+        ps = ProvisioningSession(
+            serial=device.serial,
+            mac=device.mac,
+            ip='10.0.0.5',
+            state='downloading',
+            last_seen_at=last_seen,
         )
         session.add(ps)
         session.commit()
@@ -254,6 +273,20 @@ def test_delete_device_removes_from_db(app, logged_in_client, device):
         assert get_session().get(Device, device.serial) is None
 
 
+def test_delete_device_clears_device_logs(app, logged_in_client, device):
+    with app.app_context():
+        session = get_session()
+        session.add(DeviceLogEntry(serial=device.serial, source='script', message='provisioning started'))
+        session.commit()
+
+    response = logged_in_client.delete(f'{BASE}/devices/{device.serial}')
+    assert response.status_code == 200
+
+    with app.app_context():
+        remaining = get_session().query(DeviceLogEntry).filter_by(serial=device.serial).all()
+    assert remaining == []
+
+
 # GET /api/v1/devices/sessions
 
 def test_list_sessions_returns_401_when_not_logged_in(client):
@@ -296,3 +329,67 @@ def test_get_session_returns_session_payload(logged_in_client, active_session):
     assert payload['serial'] == active_session.serial
     assert payload['ip'] == active_session.ip
     assert payload['state'] == 'lease_approved'
+
+
+def test_get_session_payload_reports_not_stale_when_recently_seen(logged_in_client, active_session):
+    payload = logged_in_client.get(f'{BASE}/devices/sessions/{active_session.serial}').get_json()['payload']
+    assert payload['stale'] is False
+
+
+def test_get_session_payload_reports_stale_after_timeout(logged_in_client, stale_session):
+    payload = logged_in_client.get(f'{BASE}/devices/sessions/{stale_session.serial}').get_json()['payload']
+    assert payload['stale'] is True
+
+
+# DELETE /api/v1/devices/sessions/<serial> — see docs/database.md, "Stale sessions"
+
+def test_cancel_session_returns_401_when_not_logged_in(client, stale_session):
+    response = client.delete(f'{BASE}/devices/sessions/{stale_session.serial}')
+    assert response.status_code == 401
+
+
+def test_cancel_session_returns_404_when_not_found(logged_in_client):
+    response = logged_in_client.delete(f'{BASE}/devices/sessions/NOSUCHSERIAL')
+    assert response.status_code == 404
+    assert response.get_json()['error'] == 'session_not_found'
+
+
+def test_cancel_session_returns_409_when_not_yet_stale(app, logged_in_client, active_session):
+    response = logged_in_client.delete(f'{BASE}/devices/sessions/{active_session.serial}')
+    assert response.status_code == 409
+    assert response.get_json()['error'] == 'session_not_stale'
+
+    with app.app_context():
+        assert get_session().get(ProvisioningSession, active_session.serial) is not None
+
+
+def test_cancel_session_returns_200_when_stale(logged_in_client, stale_session):
+    response = logged_in_client.delete(f'{BASE}/devices/sessions/{stale_session.serial}')
+    assert response.status_code == 200
+
+
+def test_cancel_session_removes_the_session(app, logged_in_client, stale_session):
+    logged_in_client.delete(f'{BASE}/devices/sessions/{stale_session.serial}')
+    with app.app_context():
+        assert get_session().get(ProvisioningSession, stale_session.serial) is None
+
+
+def test_cancel_session_writes_a_provisioning_log_entry(app, logged_in_client, stale_session):
+    logged_in_client.delete(f'{BASE}/devices/sessions/{stale_session.serial}')
+    with app.app_context():
+        entry = get_session().query(ProvisioningLog).filter_by(serial=stale_session.serial).one()
+    assert entry.event == 'provision_cancelled'
+    assert entry.ip == stale_session.ip
+
+
+def test_cancel_session_retains_device_logs(app, logged_in_client, stale_session):
+    with app.app_context():
+        session = get_session()
+        session.add(DeviceLogEntry(serial=stale_session.serial, source='script', message='stuck here'))
+        session.commit()
+
+    logged_in_client.delete(f'{BASE}/devices/sessions/{stale_session.serial}')
+
+    with app.app_context():
+        remaining = get_session().query(DeviceLogEntry).filter_by(serial=stale_session.serial).all()
+    assert len(remaining) == 1

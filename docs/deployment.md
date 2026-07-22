@@ -130,6 +130,15 @@ who mounts their own cert/key pair at those paths instead (e.g. a real
 ACME-issued cert, or a shared org CA) has it used as-is — nothing is
 overwritten if the files are already present.
 
+The generated cert includes a SAN (`127.0.0.1` + `localhost`), needed so the
+`drawbridge-rsyslog` container's `omhttp` action can verify Drawbridge's
+cert when it connects to `https://127.0.0.1:8080` inside the pod's shared
+network namespace — a bare-CN cert fails libcurl's hostname check even when
+otherwise trusted. **Upgrading from a pre-pod install:** delete
+`data/tls/cert.pem` and `data/tls/key.pem` so `ensure_cert()` regenerates
+them with the SAN on next start; an existing no-SAN cert is not replaced
+automatically.
+
 An operator who wants a "real" ACME-issued cert for browser convenience may
 put their own reverse proxy in front of the GUI path only, re-terminating/
 re-encrypting to Drawbridge's own listener. ZTP devices always talk directly
