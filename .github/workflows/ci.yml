@@ -181,6 +181,16 @@ jobs:
       # linux/arm64 covers 64-bit Raspberry Pi OS; QEMU (setup-qemu-action)
       # emulates it since this runner is amd64 - only the final stage runs
       # emulated, frontend-build is pinned to $BUILDPLATFORM (see Containerfile).
+      # cache-from/to: type=gha caches build layers (pip install, npm ci,
+      # etc.) in the Actions cache and reuses whatever's still valid on the
+      # next run - a Dockerfile/dependency change still rebuilds normally,
+      # this only speeds up runs where layers are actually unchanged.
+      # mode=max (not the default min) also caches the frontend-build
+      # stage, not just what ends up in the final image - matters here
+      # specifically because this Containerfile is multi-stage. scope=
+      # keeps this build's cache separate from Containerfile.rsyslog's
+      # below - two builds in one job would otherwise share one cache
+      # namespace and could evict each other's layers.
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -188,6 +198,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=drawbridge
+          cache-to: type=gha,scope=drawbridge,mode=max
       # Sibling image for the pod's syslog collector (see docs/logging.md).
       # context stays repo root: its COPY container/rsyslog-drawbridge.conf
       # is a root-relative path, same as the main image's frontend/ COPY.
@@ -198,3 +210,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository }}-rsyslog:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=drawbridge-rsyslog
+          cache-to: type=gha,scope=drawbridge-rsyslog,mode=max
