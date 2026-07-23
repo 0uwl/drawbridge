@@ -29,10 +29,12 @@ jobs:
               - 'requirements.txt'
               - 'pyproject.toml'
               - 'Containerfile'
+              - 'Containerfile.rsyslog'
               - 'container/**'
               - 'kea/**'
               - 'quadlet/**'
               - 'install.sh'
+              - 'uninstall.sh'
               - 'README.md'
               - '.github/workflows/ci.yml'
             frontend:
@@ -56,6 +58,17 @@ jobs:
         uses: immanuwell/dockerfile-roast@1.4.4
         with:
           files: '**/Containerfile'
+          engine: podman
+          preset: production
+      # Separate step, not a broadened glob (e.g. '**/Containerfile*') -
+      # that would also sweep in Containerfile.dev, which is deliberately
+      # excluded from production-preset linting (see its own header comment
+      # — dev/test image only, never used in production). A second literal
+      # filename keeps that exclusion intact.
+      - name: Containerfile.rsyslog linting
+        uses: immanuwell/dockerfile-roast@1.4.4
+        with:
+          files: 'Containerfile.rsyslog'
           engine: podman
           preset: production
       - name: Kea config syntax check
@@ -134,3 +147,13 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository }}:latest
+      # Sibling image for the pod's syslog collector (see docs/logging.md).
+      # context stays repo root: its COPY container/rsyslog-drawbridge.conf
+      # is a root-relative path, same as the main image's frontend/ COPY.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile.rsyslog
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}-rsyslog:latest

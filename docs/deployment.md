@@ -134,6 +134,25 @@ systemctl --user daemon-reload && systemctl --user start drawbridge-pod.service
 ```
 Starting the pod service starts both member containers together.
 
+**[uninstall.sh](../uninstall.sh)** reverses everything `install.sh` deploys
+except the packages and the pulled images: stops and removes the pod and
+its containers, deletes the three Quadlet unit files, deletes the `/app/data`
+and `/app/files` host directories (database, TLS cert/key, uploaded
+images/configs/scripts), and removes the Kea config under `/etc/kea` that
+`install.sh` wrote there — `podman`, the Kea packages themselves, and
+`ghcr.io/0uwl/drawbridge:latest`/`-rsyslog:latest` in local podman storage
+are all left alone. Those host directories default to
+`~/.local/share/drawbridge/{data,files}`, but since the `Volume=` lines
+above are editable, `uninstall.sh` reads the *installed*
+`drawbridge.container` unit's actual `Volume=` lines to find the real
+paths before removing anything — it only falls back to the default if that
+unit is already gone. `*.bak.*` backup files from earlier
+installs/upgrades are left alone too. Prompts for confirmation and lists
+exactly what it's about to remove first; `-y`/`--yes` skips the prompt for
+scripted use. Meant to be run before `install.sh` when testing a new
+version on the same host, so nothing from the previous version's database
+schema, cert, or config lingers into the fresh install.
+
 ## TLS
 
 Drawbridge terminates its own TLS by default — both GUI and device-facing
