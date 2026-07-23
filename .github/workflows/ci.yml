@@ -50,12 +50,16 @@ jobs:
       # Catches the two silently diverging - e.g. install.sh's default
       # DRAWBRIDGE_REF gets repointed at a release tag (see docs/decisions.md)
       # but README.md's plain one-liner doesn't, so it keeps installing
-      # tip-of-main instead. Matches README.md's *default* one-liner only
-      # (the line starting with a bare `curl`, not the DRAWBRIDGE_REF=...
-      # example line right after it, which is deliberately a different ref).
+      # tip-of-main instead. Matches README.md's *default* one-liner only -
+      # anchored on both the URL prefix and a bare `| bash` at end of line,
+      # since the DRAWBRIDGE_REF=... example line right after it (a
+      # deliberately different ref) also starts with `curl -fsSL https://...`
+      # now that DRAWBRIDGE_REF correctly sits on bash's side of that pipe,
+      # not curl's - see the two comments right above these one-liners in
+      # README.md for why.
       - name: Verify README.md / install.sh default ref match
         run: |
-          readme_ref=$(grep -oP '(?<=^curl -fsSL https://raw\.githubusercontent\.com/0uwl/drawbridge/)[^/]+(?=/install\.sh)' README.md)
+          readme_ref=$(grep -oP '(?<=^curl -fsSL https://raw\.githubusercontent\.com/0uwl/drawbridge/)[^/]+(?=/install\.sh \| bash$)' README.md)
           installsh_ref=$(grep -oP '(?<=DRAWBRIDGE_REF:-)[^}]+' install.sh)
           if [ "$readme_ref" != "$installsh_ref" ]; then
             echo "README.md's default curl one-liner targets '$readme_ref' but install.sh's default DRAWBRIDGE_REF is '$installsh_ref' - update both together (see docs/decisions.md)." >&2

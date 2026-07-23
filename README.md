@@ -85,10 +85,14 @@ curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/main/install.sh | b
 
 To install from a specific branch or tag instead of `main`, set
 `DRAWBRIDGE_REF` to match — it has to be named in both places, since a
-piped script can't tell what URL it was fetched from:
+piped script can't tell what URL it was fetched from. **`DRAWBRIDGE_REF`
+goes on the `bash` side of the pipe, not the `curl` side** — `VAR=val cmd1
+| cmd2` only exports `VAR` into `cmd1`'s environment (`curl`, which doesn't
+read it), not `cmd2`'s (`bash`, which does — that's what actually reads
+and executes the piped `install.sh`):
 
 ```bash
-DRAWBRIDGE_REF=v.0.3.0 curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v.0.3.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v.0.3.0/install.sh | DRAWBRIDGE_REF=v.0.3.0 bash
 ```
 
 Run as your normal user, **not** as root or via `sudo` — the script calls

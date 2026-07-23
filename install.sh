@@ -31,13 +31,16 @@ RSYSLOG_IMAGE="ghcr.io/0uwl/drawbridge-rsyslog:latest"
 QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container)
 # Overridable so a curl-piped run can target a specific branch (or, once
 # releases exist, a tag) instead of main - e.g.
-#   DRAWBRIDGE_REF=v.0.3.0 curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v.0.3.0/install.sh | bash
-# Has to be named in both the curl URL (to fetch install.sh itself from the
-# right place) and here (so install.sh's own fetches of kea/*.conf and
-# quadlet/* match) - a piped script can't introspect the URL it was
-# downloaded from, so there's no way to specify it only once. See
-# docs/decisions.md for the tradeoff this doesn't solve (main itself is
-# still a moving target).
+#   curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v.0.3.0/install.sh | DRAWBRIDGE_REF=v.0.3.0 bash
+# DRAWBRIDGE_REF has to go on the bash side of the pipe, not the curl side -
+# `VAR=val cmd1 | cmd2` only exports VAR into cmd1's environment (here,
+# curl, which doesn't read it), not cmd2's (bash, which does; this is what
+# actually reads and executes the piped install.sh). Has to be named in
+# both the curl URL (to fetch install.sh itself from the right place) and
+# here (so install.sh's own fetches of kea/*.conf and quadlet/* match) - a
+# piped script can't introspect the URL it was downloaded from, so there's
+# no way to specify it only once. See docs/decisions.md for the tradeoff
+# this doesn't solve (main itself is still a moving target).
 DRAWBRIDGE_REF="${DRAWBRIDGE_REF:-main}"
 RAW_BASE="https://raw.githubusercontent.com/0uwl/drawbridge/$DRAWBRIDGE_REF"
 KEA_DHCP4_SERVICE="kea-dhcp4-server"
