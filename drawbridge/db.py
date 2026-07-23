@@ -57,6 +57,7 @@ def _bootstrap_once(app, engine, session_factory):
         is_first_run = _is_first_run(engine, app.config['DATABASE_PATH'])
 
         Base.metadata.create_all(engine)
+        _sync_indexes(engine)
 
         with session_factory() as session:
             _seed_log_retention(session, app)
@@ -66,6 +67,25 @@ def _bootstrap_once(app, engine, session_factory):
             if is_first_run:
                 _bootstrap_admin(session, app)
             session.commit()
+
+
+def _sync_indexes(engine):
+    """create_all() only emits CREATE INDEX as part of creating a brand-new
+    table — on an already-existing table (i.e. every upgrade of a
+    previously-deployed install, not just a fresh one) an index= added to a
+    model in a later version is silently skipped, since the table itself
+    already exists and create_all() has nothing left to do for it. There's
+    no migration framework here (see docs/database.md), so this is the one
+    schema change that class of tool would otherwise handle: explicitly
+    (re)creating every declared index with checkfirst=True closes that gap
+    for index additions specifically. Column additions/type changes are a
+    different, harder problem and aren't covered by this — none exist yet.
+    Must run inside the same bootstrap lock as create_all() (see
+    _bootstrap_once) so concurrent workers don't race CREATE INDEX.
+    """
+    for table in Base.metadata.tables.values():
+        for index in table.indexes:
+            index.create(bind=engine, checkfirst=True)
 
 
 @contextmanager

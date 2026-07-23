@@ -59,7 +59,12 @@ part of the deployment, not an optional hardening step layered on later.
 
 ## Container
 
-**Containerfile** builds `localhost/drawbridge:latest` as a multi-stage,
+**Requires Podman 5.0+.** The pod runs as two images, described by three
+Quadlet unit files (below) — `.pod` Quadlet units, and the `Pod=` key on
+`.container` units, both landed in Podman 5.0. Older Podman fails with
+`unsupported key 'Pod' in group 'Container'`.
+
+**`Containerfile`** builds `localhost/drawbridge:latest` as a multi-stage,
 multi-arch (`linux/amd64`, `linux/arm64` — e.g. 64-bit Raspberry Pi OS)
 build:
 - Stage 1 (`node:22-slim`, pinned to `--platform=$BUILDPLATFORM`): builds the
@@ -72,40 +77,48 @@ build:
   - Non-root user `drawbridge` (UID 1000) created in image
   - `COPY --from=` pulls the built frontend assets from stage 1 into
     `drawbridge/static/` — Node never ships in the final image
-  - `ENTRYPOINT ["/init"]` (s6-overlay) supervises three sibling services
-    defined under `container/s6-rc.d/`: `gunicorn` (the app itself),
-    `rsyslog` (device syslog collection), and `log-poller`
-    (`drawbridge/log_poller.py`, tails rsyslog's output into the DB). See
-    [logging.md](logging.md) for the full design. Gunicorn binds
+  - `ENTRYPOINT` runs `gunicorn` directly — no process supervisor. Binds
     `0.0.0.0:$DRAWBRIDGE_PORT` (default `8080`, via `-c
     drawbridge/gunicorn.conf.py` — Gunicorn does not discover a config file
     nested under a subdirectory on its own)
-  - rsyslog listens on **:10514** inside the container, not the standard
-    :514 — 514 is a privileged port and the image runs as non-root UID 1000
-    throughout (no `CAP_NET_BIND_SERVICE`, no root init phase). The
-    Quadlet unit publishes `:10514` on the host too, rather than remapping
-    down to `:514` — see `PublishPort=` below
   - `/app/data` and `/app/files` are mount points — do not COPY content there
-  - Root filesystem is read-only at runtime; `/tmp` and `/run` are tmpfs
-    (rsyslog's own working directory and the poller's FIFO both live under
-    `/run`, so no extra volume is needed for logging)
-  - The s6-overlay download resolves `TARGETARCH` (buildx-supplied) to the
-    matching s6-overlay release arch (`amd64`→`x86_64`, `arm64`→`aarch64`);
-    an unrecognized `TARGETARCH` fails the build rather than silently
-    falling back to an `x86_64` binary on a non-`x86_64` image (fail closed)
+  - Root filesystem is read-only at runtime; `/tmp`, `/run`, and
+    `/home/drawbridge` are tmpfs — the last of those is for Gunicorn's own
+    control-socket file (`~/.gunicorn/gunicorn.ctl`, unconfigured — see
+    `gunicorn.conf.py`), not application data
 
-**Quadlet** at `~/.config/containers/systemd/drawbridge.container`, run as
-whichever user invokes it — there's no dedicated `drawbridge` system user.
-See `quadlet/drawbridge.container` in this repo. [install.sh](../install.sh)
-installs it there automatically for the user running the script (run it as
-yourself, not as root/via `sudo` — it calls `sudo` itself only for the
-steps that need it); if a unit is already present and differs, it prompts
-to back up the old one before overwriting rather than silently skipping or
-clobbering it.
+**`Containerfile.rsyslog`** builds `localhost/drawbridge-rsyslog:latest` —
+a separate, single-stage Alpine image (`apk add rsyslog rsyslog-http`),
+`ENTRYPOINT` running `rsyslogd` directly, also no supervisor. Listens on
+**:10514** inside the container, not the standard :514 — 514 is a
+privileged port and both images run as non-root UID 1000 throughout (no
+`CAP_NET_BIND_SERVICE`). See [logging.md](logging.md) for the full
+container-layer and rsyslog-config design.
 
-Drawbridge is expected to run as a rootless Podman container with the same
+**Quadlet**, at `~/.config/containers/systemd/`, run as whichever user
+invokes it — there's no dedicated `drawbridge` system user:
+- `quadlet/drawbridge.pod` — owns the pod's shared network namespace,
+  `PublishPort=` (`8080` and `10514/udp`+`/tcp`), and `UserNS=keep-id` for
+  both member containers' bind mounts.
+- `quadlet/drawbridge.container` — the app, `Pod=drawbridge.pod`; otherwise
+  the same `Volume=`/`Environment=`/`ReadOnly=true`/`Tmpfs=` as before the
+  pod split.
+- `quadlet/drawbridge-rsyslog.container` — the syslog collector,
+  `Pod=drawbridge.pod`, no volume mount at all (see [logging.md](logging.md)
+  for why it doesn't need Drawbridge's TLS cert), `Restart=on-failure`
+  independent of the app container — a crashed `drawbridge-rsyslog` no
+  longer takes `drawbridge` down with it, unlike the old single-container/
+  s6 setup.
+
+[install.sh](../install.sh) installs all three there automatically for the
+user running the script (run it as yourself, not as root/via `sudo` — it
+calls `sudo` itself only for the steps that need it); if a unit is already
+present and differs, it prompts to back up the old one before overwriting
+rather than silently skipping or clobbering it.
+
+Drawbridge is expected to run as a rootless Podman pod with the same
 permissions as the invoking user. The data directories used for the
-container must therefore be owned by that user. It's recommended to create a
+containers must therefore be owned by that user. It's recommended to create a
 folder under that user's own XDG data dir, not a root-owned path like `/srv`,
 so no `sudo`/`chown` is needed.
 
@@ -115,10 +128,30 @@ mkdir -p ~/.local/share/drawbridge/{data,files}
 ```
 
 Then, after editing `SECRET_KEY` (and `ADMIN_PASSWORD` or `LoadCredential=`)
-in the installed unit:
+in the installed `drawbridge.container` unit:
 ```bash
-systemctl --user daemon-reload && systemctl --user start drawbridge
+systemctl --user daemon-reload && systemctl --user start drawbridge-pod.service
 ```
+Starting the pod service starts both member containers together.
+
+**[uninstall.sh](../uninstall.sh)** reverses everything `install.sh` deploys
+except the packages and the pulled images: stops and removes the pod and
+its containers, deletes the three Quadlet unit files, deletes the `/app/data`
+and `/app/files` host directories (database, TLS cert/key, uploaded
+images/configs/scripts), and removes the Kea config under `/etc/kea` that
+`install.sh` wrote there — `podman`, the Kea packages themselves, and
+`ghcr.io/0uwl/drawbridge:latest`/`-rsyslog:latest` in local podman storage
+are all left alone. Those host directories default to
+`~/.local/share/drawbridge/{data,files}`, but since the `Volume=` lines
+above are editable, `uninstall.sh` reads the *installed*
+`drawbridge.container` unit's actual `Volume=` lines to find the real
+paths before removing anything — it only falls back to the default if that
+unit is already gone. `*.bak.*` backup files from earlier
+installs/upgrades are left alone too. Prompts for confirmation and lists
+exactly what it's about to remove first; `-y`/`--yes` skips the prompt for
+scripted use. Meant to be run before `install.sh` when testing a new
+version on the same host, so nothing from the previous version's database
+schema, cert, or config lingers into the fresh install.
 
 ## TLS
 
@@ -129,6 +162,17 @@ On first run, if `TLS_CERT_PATH`/`TLS_KEY_PATH` don't already exist,
 who mounts their own cert/key pair at those paths instead (e.g. a real
 ACME-issued cert, or a shared org CA) has it used as-is — nothing is
 overwritten if the files are already present.
+
+The generated cert includes a SAN (`127.0.0.1` + `localhost`), needed so the
+`drawbridge-rsyslog` container's `omhttp` action passes libcurl's hostname
+check when it connects to `https://127.0.0.1:8080` inside the pod's shared
+network namespace — a bare-CN cert fails that check even when otherwise
+trusted. (CA-chain validation itself is intentionally skipped for this one
+connection — see [logging.md](logging.md) — but hostname verification
+stays on.) **Upgrading from a pre-pod install:** delete
+`data/tls/cert.pem` and `data/tls/key.pem` so `ensure_cert()` regenerates
+them with the SAN on next start; an existing no-SAN cert is not replaced
+automatically.
 
 An operator who wants a "real" ACME-issued cert for browser convenience may
 put their own reverse proxy in front of the GUI path only, re-terminating/
@@ -155,10 +199,11 @@ terminates TLS.
 
 ## Device Syslog Collection
 
-See [logging.md](logging.md) for the full design (rsyslog-in-container via
-s6-overlay, the FIFO→poller→DB path, the `DeviceLogEntry` schema, and the
-two `/api/v1/device-logs` routes). Quadlet publishes both UDP and TCP on
-**`:10514`, not the standard `:514`**:
+See [logging.md](logging.md) for the full design (the `drawbridge-rsyslog`
+pod member, its `omhttp`-to-`POST /api/v1/device-logs` path, the
+`DeviceLogEntry` schema, and the two `/api/v1/device-logs` routes). The pod
+publishes both UDP and TCP on **`:10514`, not the standard `:514`**
+(`quadlet/drawbridge.pod`):
 
 ```ini
 PublishPort=10514:10514/udp
@@ -177,8 +222,8 @@ destination just needs to be configured to point at **`:10514`** on the
 Drawbridge host explicitly — see `logger -P 10514` below and the IOS-XE
 example in [logging.md](logging.md).
 
-No unit test covers the supervisor/rsyslog wiring itself (infra, not
-logic) — verify manually after `podman build`/`podman run`:
+No unit test covers the container/rsyslog wiring itself (infra, not logic)
+— verify manually after bringing the pod up:
 
 ```bash
 # TCP
@@ -188,9 +233,10 @@ logger -n <drawbridge-host> -P 10514 -d "smoke test udp"
 ```
 
 Then confirm a `source: 'syslog'` row appears via
-`GET /api/v1/device-logs` (requires login) — or, from inside the
-container, `podman logs drawbridge` should show all three s6 services
-(`gunicorn`, `rsyslog`, `log-poller`) start without error.
+`GET /api/v1/device-logs` (requires login) — or, `podman logs
+drawbridge-rsyslog` should show the line arrive and the `omhttp` action
+succeed, and `podman logs drawbridge` should show clean startup, with no
+supervisor in between, in both containers.
 
 ## SAML SSO
 

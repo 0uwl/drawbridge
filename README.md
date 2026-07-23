@@ -70,26 +70,48 @@ other arm64/amd64 Ubuntu/Debian host; Podman/Docker pull the matching arch
 automatically, no extra flags needed.
 
 On an Ubuntu/Debian provisioning host, [install.sh](install.sh) installs
-`podman` and Kea if either is missing, installs Drawbridge's `kea/*.conf`
-into `/etc/kea`, installs the Quadlet unit to
-`~/.config/containers/systemd/drawbridge.container` for your user (skipped
-if one is already there, so a previously-edited unit is never overwritten),
-and pulls `ghcr.io/0uwl/drawbridge:latest`:
+`podman` (5.0+ — needed for the `.pod` Quadlet unit below; the script exits
+with guidance if the default repo only has something older, e.g. Ubuntu
+24.04 LTS's 4.9.3) and Kea if either is missing, installs Drawbridge's
+`kea/*.conf` into `/etc/kea`, installs the three Quadlet unit files (the
+pod plus its two member containers) to `~/.config/containers/systemd/` for
+your user (skipped for any that already exist, so a previously-edited unit
+is never overwritten), and pulls both `ghcr.io/0uwl/drawbridge:latest` and
+`ghcr.io/0uwl/drawbridge-rsyslog:latest`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/main/install.sh | bash
 ```
 
+To install from a specific branch or tag instead of `main`, set
+`DRAWBRIDGE_REF` to match — it has to be named in both places, since a
+piped script can't tell what URL it was fetched from. **`DRAWBRIDGE_REF`
+goes on the `bash` side of the pipe, not the `curl` side** — `VAR=val cmd1
+| cmd2` only exports `VAR` into `cmd1`'s environment (`curl`, which doesn't
+read it), not `cmd2`'s (`bash`, which does — that's what actually reads
+and executes the piped `install.sh`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v.0.3.0/install.sh | DRAWBRIDGE_REF=v.0.3.0 bash
+```
+
 Run as your normal user, **not** as root or via `sudo` — the script calls
 `sudo` itself for the handful of steps that need root (installing
 packages, writing `/etc/kea`, managing the two Kea system services); it'll
-prompt once upfront. Everything else (the image pull, the Quadlet unit
+prompt once upfront. Everything else (the image pulls, the Quadlet units
 under `~/.config`) runs as you, so it ends up correctly owned. Review
 [install.sh](install.sh) before running it either way. It does not start
-the Drawbridge container itself — `SECRET_KEY` still needs setting in the
-installed unit and the host data directories still need creating; the
-script prints the exact commands at the end. See
+the Drawbridge pod itself — `SECRET_KEY` still needs setting in the
+installed `drawbridge.container` unit and the host data directories still
+need creating; the script prints the exact commands at the end. See
 [docs/deployment.md](docs/deployment.md) for details.
+
+[uninstall.sh](uninstall.sh) is the reverse: stops and removes the pod,
+deletes the Quadlet units, the data directory (database, TLS cert/key,
+uploaded files), and the Kea config `install.sh` deployed — leaving
+`podman`, the Kea packages, and the pulled images alone. Useful for a
+genuinely clean slate before testing a new version — run it, then
+`install.sh` again, with nothing carried over from the old install.
 
 Equivalent from a repo checkout: `./install.sh`.
 

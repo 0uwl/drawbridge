@@ -5,6 +5,7 @@ TLS_KEY_PATH instead just works — ensure_cert() only generates one if
 nothing is there yet.
 """
 import datetime
+import ipaddress
 from pathlib import Path
 
 from cryptography import x509
@@ -46,6 +47,15 @@ def ensure_cert(cert_path: str, key_path: str) -> None:
             .serial_number(x509.random_serial_number())
             .not_valid_before(now)
             .not_valid_after(now + datetime.timedelta(days=CERT_VALIDITY_DAYS))
+            .add_extension(
+                # rsyslog's omhttp (libcurl) does hostname verification against
+                # https://127.0.0.1:8080 and ignores a bare CN — needs a SAN.
+                x509.SubjectAlternativeName([
+                    x509.DNSName('localhost'),
+                    x509.IPAddress(ipaddress.IPv4Address('127.0.0.1')),
+                ]),
+                critical=False,
+            )
             .sign(key, hashes.SHA256())
         )
 

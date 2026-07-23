@@ -221,21 +221,29 @@
   point — `login()` validates credentials but deliberately withholds a
   session while the flag is set.
 
-- **`install.sh`'s curl-pipe fetch is pinned to a branch ref, not a release
-  tag — revisit once real releases start.** When `install.sh` is run via
+- **`install.sh`'s curl-pipe fetch defaults to `main`, not a release tag —
+  revisit once real releases start.** When `install.sh` is run via
   `curl | bash` there's no sibling `kea/` directory to read from, so it
-  fetches `kea/kea-dhcp4.conf`/`kea/kea-ctrl-agent.conf` from
-  `raw.githubusercontent.com` at a hardcoded ref (`RAW_BASE`). That same ref
-  is duplicated in `README.md`'s curl one-liner, and a CI check
-  (`.github/workflows/ci.yml`) fails the build if the
-  two diverge — but the check only catches the two copies disagreeing with
-  each other, not the underlying problem: a branch name is a moving target,
-  so the URL anyone copies today silently serves whatever lands on that
-  branch tomorrow, not a fixed point in time. There's no release process yet
+  fetches `kea/kea-dhcp4.conf`/`kea/kea-ctrl-agent.conf` and the Quadlet
+  unit files from `raw.githubusercontent.com` at `$DRAWBRIDGE_REF` (env
+  var, default `main`) via `RAW_BASE`. The ref has to be named twice to
+  actually change it — once in the curl URL fetching `install.sh` itself,
+  once in `DRAWBRIDGE_REF` so `install.sh`'s own fetches match — a piped
+  script can't introspect the URL it was downloaded from, so there's no way
+  to specify it only once (see `README.md`'s "Installation" section for
+  both forms). A CI check (`.github/workflows/ci.yml`, "Verify README.md /
+  install.sh default ref match") fails the build if `README.md`'s default
+  one-liner and `install.sh`'s default `DRAWBRIDGE_REF` disagree — but that
+  only catches the two copies disagreeing with *each other*, not the
+  underlying problem with the *default* itself: `main` is still a moving
+  target, so
+  the plain one-liner silently serves whatever lands on that branch on the
+  day it's run, not a fixed point in time. There's no release process yet
   (see [alpha.md](../alpha.md)), so this is accepted for now. Once real
-  releases start post-alpha, repoint both at a release tag instead — e.g.
-  resolve `latest` via the GitHub Releases API — so the one-liner installs a
-  fixed, reproducible version rather than tip-of-branch.
+  releases start post-alpha, default `DRAWBRIDGE_REF` to a resolved release
+  tag instead of `main` — e.g. via the GitHub Releases API — so the plain
+  one-liner installs a fixed, reproducible version rather than
+  tip-of-branch.
 
 - **`DRAWBRIDGE_PORT` controls where the app listens, but two other
   hardcoded `8080`s aren't wired to it.** `drawbridge/gunicorn.conf.py`'s

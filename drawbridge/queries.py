@@ -91,6 +91,26 @@ def get_provisioning_session(session: Session, serial: str) -> ProvisioningSessi
     return session.get(ProvisioningSession, serial)
 
 
+def update_session_state(session: Session, *, serial: str, state: str) -> ProvisioningSession | None:
+    ps = get_provisioning_session(session, serial)
+    if ps is None:
+        return None
+    ps.state = state
+    return ps
+
+
+def touch_session(session: Session, *, serial: str) -> None:
+    """Bumps last_seen_at to now for the session matching serial, a no-op
+    if none exists. Called on every correlated /device-logs POST regardless
+    of whether the message matches a device_events trigger — any log line
+    at all is evidence the device is still alive, not just ones that
+    happen to produce a state change (see docs/database.md, "Stale
+    sessions")."""
+    ps = get_provisioning_session(session, serial)
+    if ps is not None:
+        ps.last_seen_at = utcnow_iso()
+
+
 def find_active_session_by_ip(session: Session, ip: str) -> ProvisioningSession | None:
     """Best-effort match of a syslog line's source IP to the ProvisioningSession
     that pinned it (see beta.md §7's pin-on-first-use model). The in-flight
@@ -119,7 +139,9 @@ def create_provisioning_session(
     overwrite. image/config_file are the device's assigned values (from its
     Device row) at approval time, not a report of what it actually applied
     — see ProvisioningSession's docstring — and are refreshed on every
-    non-conflicting call regardless of mac/ip."""
+    non-conflicting call regardless of mac/ip. A repeat call also counts as
+    device activity, so it bumps last_seen_at (see docs/database.md,
+    "Stale sessions")."""
     ps = session.get(ProvisioningSession, serial)
     if ps is not None:
         if ps.mac is not None and mac is not None and ps.mac != mac:
@@ -132,6 +154,7 @@ def create_provisioning_session(
             ps.ip = ip
         ps.image = image
         ps.config_file = config_file
+        ps.last_seen_at = utcnow_iso()
         return ps
     ps = ProvisioningSession(
         serial=serial, mac=mac, ip=ip, image=image, config_file=config_file, state='lease_approved',
@@ -356,10 +379,15 @@ def add_device_log_entry(
     return entry
 
 
-def list_device_logs(session: Session, serial: str | None = None) -> list[DeviceLogEntry]:
+def list_device_logs(session: Session, serial: str | None = None, after_id: int | None = None) -> list[DeviceLogEntry]:
+    """after_id lets a poller fetch only rows newer than the last one it
+    already has, instead of re-fetching (and the frontend re-rendering) the
+    whole growing list on every poll — see docs/api.md."""
     stmt = select(DeviceLogEntry).order_by(DeviceLogEntry.timestamp.desc())
     if serial is not None:
         stmt = stmt.where(DeviceLogEntry.serial == serial)
+    if after_id is not None:
+        stmt = stmt.where(DeviceLogEntry.id > after_id)
     return list(session.scalars(stmt).all())
 
 
@@ -371,3 +399,12 @@ def purge_expired_device_logs(session: Session, retention_days: str) -> None:
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=int(retention_days))).isoformat(timespec='microseconds')
     session.execute(delete(DeviceLogEntry).where(DeviceLogEntry.timestamp < cutoff))
+
+
+def delete_device_logs_by_serial(session: Session, serial: str) -> None:
+    """Deletes all DeviceLogEntry rows for one serial, regardless of age —
+    called on a successful provision_complete (see leases.py). A
+    successfully-provisioned device's raw log stream was only ever useful
+    for watching that run in progress; it doesn't need to wait out
+    log_retention_days the way a failure's does (see docs/database.md)."""
+    session.execute(delete(DeviceLogEntry).where(DeviceLogEntry.serial == serial))

@@ -30,12 +30,20 @@ export interface ProvisioningSession {
   ip: string | null
   image: string | null
   config_file: string | null
-  // Only ever written as 'lease_approved' today (drawbridge/queries.py).
-  // models.py's comment lists future values, but no code transitions state
-  // yet — a literal union would misdescribe reality. Widen later once real
-  // transitions exist, don't guess them now.
+  // Written by drawbridge/queries.py at session creation ('lease_approved')
+  // and updated by drawbridge/device_events.py as vendor-specific syslog
+  // triggers match (see docs/logging.md, "Multi-vendor"). Stays a loose
+  // string, not a literal union of PROVISIONING_STATES: new vendor states
+  // can appear without a matching frontend release, and
+  // utils/provisioningStates.ts's `??` fallback already renders any
+  // unrecognized value gracefully.
   state: string
   approved_at: string
+  last_seen_at: string
+  // Computed server-side (ProvisioningSession.is_stale()) — the threshold
+  // (SESSION_STALE_AFTER_MINUTES) lives once in drawbridge/models.py, not
+  // duplicated here as a constant to compare last_seen_at against.
+  stale: boolean
 }
 
 export interface ProvisioningLog {

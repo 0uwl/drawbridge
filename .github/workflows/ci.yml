@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # development is a testing stage before main - same test/publish
+    # pipeline as main, just tagged by branch name instead of :latest (see
+    # the publish job below). Add another branch here (and to publish's
+    # if: below) for any further testing-stage branches.
+    branches: [main, development]
   pull_request:
     branches: [main]
 
@@ -29,10 +33,12 @@ jobs:
               - 'requirements.txt'
               - 'pyproject.toml'
               - 'Containerfile'
+              - 'Containerfile.rsyslog'
               - 'container/**'
               - 'kea/**'
               - 'quadlet/**'
               - 'install.sh'
+              - 'uninstall.sh'
               - 'README.md'
               - '.github/workflows/ci.yml'
             frontend:
@@ -45,6 +51,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Catches the two silently diverging - e.g. install.sh's default
+      # DRAWBRIDGE_REF gets repointed at a release tag (see docs/decisions.md)
+      # but README.md's plain one-liner doesn't, so it keeps installing
+      # tip-of-main instead. Matches README.md's *default* one-liner only -
+      # anchored on both the URL prefix and a bare `| bash` at end of line,
+      # since the DRAWBRIDGE_REF=... example line right after it (a
+      # deliberately different ref) also starts with `curl -fsSL https://...`
+      # now that DRAWBRIDGE_REF correctly sits on bash's side of that pipe,
+      # not curl's - see the two comments right above these one-liners in
+      # README.md for why.
+      - name: Verify README.md / install.sh default ref match
+        run: |
+          readme_ref=$(grep -oP '(?<=^curl -fsSL https://raw\.githubusercontent\.com/0uwl/drawbridge/)[^/]+(?=/install\.sh \| bash$)' README.md)
+          installsh_ref=$(grep -oP '(?<=DRAWBRIDGE_REF:-)[^}]+' install.sh)
+          if [ "$readme_ref" != "$installsh_ref" ]; then
+            echo "README.md's default curl one-liner targets '$readme_ref' but install.sh's default DRAWBRIDGE_REF is '$installsh_ref' - update both together (see docs/decisions.md)." >&2
+            exit 1
+          fi
+          echo "OK: both default to '$readme_ref'"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -56,6 +81,17 @@ jobs:
         uses: immanuwell/dockerfile-roast@1.4.4
         with:
           files: '**/Containerfile'
+          engine: podman
+          preset: production
+      # Separate step, not a broadened glob (e.g. '**/Containerfile*') -
+      # that would also sweep in Containerfile.dev, which is deliberately
+      # excluded from production-preset linting (see its own header comment
+      # — dev/test image only, never used in production). A second literal
+      # filename keeps that exclusion intact.
+      - name: Containerfile.rsyslog linting
+        uses: immanuwell/dockerfile-roast@1.4.4
+        with:
+          files: 'Containerfile.rsyslog'
           engine: podman
           preset: production
       - name: Kea config syntax check
@@ -104,7 +140,8 @@ jobs:
     # (backend or frontend) changed, so a docs-only push doesn't rebuild.
     if: >-
       always() &&
-      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') &&
       (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true') &&
       needs.test.result != 'failure' && needs.test.result != 'cancelled' &&
       needs.frontend.result != 'failure' && needs.frontend.result != 'cancelled'
@@ -121,6 +158,23 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # main keeps :latest (existing pulls of that tag shouldn't change
+      # meaning); every other allowed branch (development, and any future
+      # testing-stage branch added to this workflow's `on.push.branches`
+      # and the `if:` above) is tagged with its own branch name instead.
+      # Tags by the branch actually pushed to, not whatever branch a merge
+      # commit's content originally came from - GitHub's push event has no
+      # record of the latter once it's merged.
+      - name: Compute image tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_NAME" = "main" ]; then
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
       # Containerfile builds the Vue frontend in its own stage (see
       # docs/frontend.md, docs/deployment.md) - no separate frontend build
       # step needed here.
@@ -133,4 +187,14 @@ jobs:
           file: Containerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest
+          tags: ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}
+      # Sibling image for the pod's syslog collector (see docs/logging.md).
+      # context stays repo root: its COPY container/rsyslog-drawbridge.conf
+      # is a root-relative path, same as the main image's frontend/ COPY.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile.rsyslog
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}-rsyslog:${{ steps.tag.outputs.tag }}

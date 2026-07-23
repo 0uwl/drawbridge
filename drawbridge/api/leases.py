@@ -1,7 +1,14 @@
 from flask import Blueprint, request
 
 from drawbridge.db import get_session
-from drawbridge.queries import get_device, get_provisioning_session, create_provisioning_session, delete_provisioning_session, add_log_entry
+from drawbridge.queries import (
+    add_log_entry,
+    create_provisioning_session,
+    delete_device_logs_by_serial,
+    delete_provisioning_session,
+    get_device,
+    get_provisioning_session,
+)
 from drawbridge.utils import error_response, success_response
 
 def create_blueprint():
@@ -93,6 +100,12 @@ def create_blueprint():
             detail=detail,
         )
         delete_provisioning_session(session, serial)
+        if event == 'provision_complete':
+            # A clean success has no further troubleshooting value — clear
+            # the raw device-log stream now rather than waiting out
+            # log_retention_days like a failure's does (see
+            # docs/database.md, "Log Retention & Data Minimisation").
+            delete_device_logs_by_serial(session, serial)
         session.commit()
 
         return success_response(f'{serial} provisioning recorded')

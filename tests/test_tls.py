@@ -1,5 +1,7 @@
 import ssl
 
+from cryptography import x509
+
 from drawbridge.tls import ensure_cert
 
 
@@ -45,3 +47,17 @@ def test_ensure_cert_files_are_valid_pem(tmp_path):
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(str(cert_path), str(key_path))
+
+
+def test_ensure_cert_includes_san_for_127_0_0_1_and_localhost(tmp_path):
+    # rsyslog's omhttp (libcurl) hostname-verifies https://127.0.0.1:8080 and
+    # ignores a bare CN — regression coverage for that SAN requirement.
+    cert_path = tmp_path / 'cert.pem'
+    key_path = tmp_path / 'key.pem'
+
+    ensure_cert(str(cert_path), str(key_path))
+
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert 'localhost' in san.get_values_for_type(x509.DNSName)
+    assert str(san.get_values_for_type(x509.IPAddress)[0]) == '127.0.0.1'

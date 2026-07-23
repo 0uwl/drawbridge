@@ -28,5 +28,20 @@ export const useSessionsStore = defineStore('sessions', {
         this.loading = false
       }
     },
+
+    async cancel(serial: string): Promise<boolean> {
+      this.loading = true
+      this.error = null
+      try {
+        await client.delete(`/devices/sessions/${serial}`)
+        await this.list()
+        return true
+      } catch (err) {
+        this.error = (err as Error).message
+        return false
+      } finally {
+        this.loading = false
+      }
+    },
   },
 })

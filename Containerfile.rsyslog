@@ -1,0 +1,22 @@
+# Sibling image to Containerfile, run in the same drawbridge pod (see
+# quadlet/drawbridge.pod). Alpine, not Debian/Ubuntu: Alpine packages
+# omhttp's dependency as rsyslog-http; Debian/Ubuntu's rsyslog packaging
+# doesn't ship an omhttp-capable build at all. See docs/logging.md.
+FROM alpine:3.20
+
+RUN adduser -D -u 1000 rsyslog \
+    && apk add --no-cache rsyslog rsyslog-http
+
+COPY container/rsyslog-drawbridge.conf /etc/rsyslog.d/drawbridge.conf
+
+USER rsyslog
+
+# Informational only, same posture as Containerfile's EXPOSE — the actual
+# bind ports come from rsyslog-drawbridge.conf's input() blocks.
+EXPOSE 10514/udp
+EXPOSE 10514/tcp
+
+# -n: foreground, required as a container's single process (no supervisor).
+# -i NONE: no pid file — matches running as non-root with a read-only
+# filesystem (see quadlet/drawbridge-rsyslog.container).
+ENTRYPOINT ["rsyslogd", "-n", "-i", "NONE", "-f", "/etc/rsyslog.d/drawbridge.conf"]

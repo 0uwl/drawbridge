@@ -1,4 +1,5 @@
 import multiprocessing
+import sqlite3
 
 from sqlalchemy import text
 
@@ -282,3 +283,54 @@ def test_concurrent_first_run_bootstraps_exactly_once(tmp_path):
         session = get_session()
         assert session.query(User).filter_by(username='admin').count() == 1
         assert session.query(Setting).filter_by(key='log_retention_days').count() == 1
+
+
+# Schema evolution — see docs/database.md, "Schema evolution"
+
+def _indexed_columns(session, table_name):
+    index_rows = session.execute(text(f"PRAGMA index_list('{table_name}')")).all()
+    columns = set()
+    for row in index_rows:
+        index_name = row[1]
+        columns.update(r[2] for r in session.execute(text(f"PRAGMA index_info('{index_name}')")).all())
+    return columns
+
+
+def test_sync_indexes_adds_a_missing_index_to_an_already_existing_table(tmp_path):
+    """Regression for create_all()'s upgrade gap: it only emits CREATE INDEX
+    while creating a brand-new table, so an index= added to a model in a
+    later version would otherwise never reach an already-deployed database.
+    Simulates that by hand-creating device_logs the way a pre-index install
+    would have it, then asserting init_db() (via create_app()) adds the
+    missing index rather than silently skipping the existing table."""
+    database_path = str(tmp_path / 'drawbridge.db')
+
+    conn = sqlite3.connect(database_path)
+    conn.execute("""
+        CREATE TABLE device_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            serial TEXT,
+            source TEXT NOT NULL,
+            message TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+    app = create_app({'TESTING': True, 'DATABASE_PATH': database_path, 'FILES_PATH': str(tmp_path / 'files')})
+
+    with app.app_context():
+        assert 'timestamp' in _indexed_columns(get_session(), 'device_logs')
+
+
+def test_sync_indexes_is_idempotent_across_repeated_startups(tmp_path):
+    database_path = str(tmp_path / 'drawbridge.db')
+    files_path = str(tmp_path / 'files')
+
+    create_app({'TESTING': True, 'DATABASE_PATH': database_path, 'FILES_PATH': files_path})
+    app = create_app({'TESTING': True, 'DATABASE_PATH': database_path, 'FILES_PATH': files_path})
+
+    with app.app_context():
+        assert 'timestamp' in _indexed_columns(get_session(), 'device_logs')
+        assert 'timestamp' in _indexed_columns(get_session(), 'provisioning_log')

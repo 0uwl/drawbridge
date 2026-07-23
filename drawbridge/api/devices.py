@@ -4,7 +4,18 @@ from flask import Blueprint, request
 from flask_login import current_user, login_required
 
 from drawbridge.db import get_session
-from drawbridge.queries import list_devices, add_device, get_device, delete_device, get_provisioning_session, list_sessions
+from drawbridge.models import SESSION_STALE_AFTER_MINUTES
+from drawbridge.queries import (
+    add_device,
+    add_log_entry,
+    delete_device,
+    delete_device_logs_by_serial,
+    delete_provisioning_session,
+    get_device,
+    get_provisioning_session,
+    list_devices,
+    list_sessions,
+)
 from drawbridge.utils import error_response, success_response
 
 
@@ -64,6 +75,10 @@ def create_blueprint():
                         code=409,
                     )
                 delete_device(session, serial)
+                # A device that's no longer allowlisted has nothing left for
+                # Drawbridge to track except its ProvisioningLog history —
+                # see docs/database.md, "Log Retention & Data Minimisation".
+                delete_device_logs_by_serial(session, serial)
                 session.commit()
                 return success_response(f'{serial} deleted')
 
@@ -71,17 +86,48 @@ def create_blueprint():
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
     @bp.get('/sessions')
-    @bp.get('/sessions/<string:serial>')
     @login_required
-    def sessions(serial=None):
+    def list_active_sessions():
         db_session = get_session()
-        if serial is not None:
-            active = get_provisioning_session(db_session, serial)
-            if active is None:
-                return error_response(f'Session for {serial} not found', 'session_not_found', code=404)
-            return success_response(f'Session for {serial}', payload=active.as_dict(), level=logging.DEBUG)
-        else:
-            active_sessions = list_sessions(db_session)
-            return success_response('Returned active sessions', payload=[s.as_dict() for s in active_sessions], level=logging.DEBUG)
+        active_sessions = list_sessions(db_session)
+        return success_response('Returned active sessions', payload=[s.as_dict() for s in active_sessions], level=logging.DEBUG)
+
+    @bp.route('/sessions/<string:serial>', methods=['GET', 'DELETE'])
+    @login_required
+    def session_actions(serial: str):
+        db_session = get_session()
+        active = get_provisioning_session(db_session, serial)
+        if active is None:
+            return error_response(f'Session for {serial} not found', 'session_not_found', code=404)
+
+        match (request.method):
+            case 'GET':
+                return success_response(f'Session for {serial}', payload=active.as_dict(), level=logging.DEBUG)
+
+            case 'DELETE':
+                # See docs/database.md, "Stale sessions" — cancellation is
+                # only ever admin-initiated, and only once the session has
+                # been quiet longer than the timeout. Never auto-expired.
+                if not active.is_stale():
+                    return error_response(
+                        f"{serial}'s session is still active and cannot be cancelled yet",
+                        'session_not_stale',
+                        code=409,
+                    )
+                add_log_entry(
+                    db_session,
+                    serial=serial,
+                    event='provision_cancelled',
+                    ip=active.ip,
+                    image=active.image,
+                    config_file=active.config_file,
+                    detail=f'Cancelled by operator after {SESSION_STALE_AFTER_MINUTES} minutes of inactivity',
+                )
+                delete_provisioning_session(db_session, serial)
+                db_session.commit()
+                return success_response(f'{serial} session cancelled')
+
+            case _:
+                return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
     return bp
