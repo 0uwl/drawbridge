@@ -22,13 +22,6 @@
 # from RAW_BASE into a temp dir.
 set -euo pipefail
 
-IMAGE="ghcr.io/0uwl/drawbridge:latest"
-RSYSLOG_IMAGE="ghcr.io/0uwl/drawbridge-rsyslog:latest"
-# Pod unit first: drawbridge.container's Pod= reference means Quadlet needs
-# it present at daemon-reload time, though install order here doesn't
-# actually matter (all three land before the daemon-reload this script
-# tells the operator to run at the end).
-QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container)
 # Overridable so a curl-piped run can target a specific branch (or, once
 # releases exist, a tag) instead of main - e.g.
 #   curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v.0.3.0/install.sh | DRAWBRIDGE_REF=v.0.3.0 bash
@@ -37,12 +30,32 @@ QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container)
 # curl, which doesn't read it), not cmd2's (bash, which does; this is what
 # actually reads and executes the piped install.sh). Has to be named in
 # both the curl URL (to fetch install.sh itself from the right place) and
-# here (so install.sh's own fetches of kea/*.conf and quadlet/* match) - a
-# piped script can't introspect the URL it was downloaded from, so there's
-# no way to specify it only once. See docs/decisions.md for the tradeoff
-# this doesn't solve (main itself is still a moving target).
+# here (so install.sh's own fetches of kea/*.conf and quadlet/* match, and
+# so the image tag pulled below matches too) - a piped script can't
+# introspect the URL it was downloaded from, so there's no way to specify
+# it only once. See docs/decisions.md for the tradeoff this doesn't solve
+# (main itself is still a moving target).
 DRAWBRIDGE_REF="${DRAWBRIDGE_REF:-main}"
 RAW_BASE="https://raw.githubusercontent.com/0uwl/drawbridge/$DRAWBRIDGE_REF"
+
+# Same tag scheme .github/workflows/ci.yml's publish job uses: main -> latest
+# (existing installs pulling :latest shouldn't change meaning), every other
+# ref -> tagged with its own name (e.g. development -> :development). Keeps
+# this in sync with DRAWBRIDGE_REF so a testing-branch install actually
+# pulls that branch's image instead of always landing on :latest regardless
+# of ref.
+if [ "$DRAWBRIDGE_REF" = "main" ]; then
+    IMAGE_TAG="latest"
+else
+    IMAGE_TAG="$DRAWBRIDGE_REF"
+fi
+IMAGE="ghcr.io/0uwl/drawbridge:$IMAGE_TAG"
+RSYSLOG_IMAGE="ghcr.io/0uwl/drawbridge-rsyslog:$IMAGE_TAG"
+# Pod unit first: drawbridge.container's Pod= reference means Quadlet needs
+# it present at daemon-reload time, though install order here doesn't
+# actually matter (all three land before the daemon-reload this script
+# tells the operator to run at the end).
+QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container)
 KEA_DHCP4_SERVICE="kea-dhcp4-server"
 KEA_CTRL_AGENT_SERVICE="kea-ctrl-agent"
 
