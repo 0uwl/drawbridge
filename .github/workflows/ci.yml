@@ -47,6 +47,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Catches the two silently diverging - e.g. install.sh's default
+      # DRAWBRIDGE_REF gets repointed at a release tag (see docs/decisions.md)
+      # but README.md's plain one-liner doesn't, so it keeps installing
+      # tip-of-main instead. Matches README.md's *default* one-liner only
+      # (the line starting with a bare `curl`, not the DRAWBRIDGE_REF=...
+      # example line right after it, which is deliberately a different ref).
+      - name: Verify README.md / install.sh default ref match
+        run: |
+          readme_ref=$(grep -oP '(?<=^curl -fsSL https://raw\.githubusercontent\.com/0uwl/drawbridge/)[^/]+(?=/install\.sh)' README.md)
+          installsh_ref=$(grep -oP '(?<=DRAWBRIDGE_REF:-)[^}]+' install.sh)
+          if [ "$readme_ref" != "$installsh_ref" ]; then
+            echo "README.md's default curl one-liner targets '$readme_ref' but install.sh's default DRAWBRIDGE_REF is '$installsh_ref' - update both together (see docs/decisions.md)." >&2
+            exit 1
+          fi
+          echo "OK: both default to '$readme_ref'"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

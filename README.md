@@ -83,6 +83,14 @@ is never overwritten), and pulls both `ghcr.io/0uwl/drawbridge:latest` and
 curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/main/install.sh | bash
 ```
 
+To install from a specific branch or tag instead of `main`, set
+`DRAWBRIDGE_REF` to match — it has to be named in both places, since a
+piped script can't tell what URL it was fetched from:
+
+```bash
+DRAWBRIDGE_REF=v.0.3.0 curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v.0.3.0/install.sh | bash
+```
+
 Run as your normal user, **not** as root or via `sudo` — the script calls
 `sudo` itself for the handful of steps that need root (installing
 packages, writing `/etc/kea`, managing the two Kea system services); it'll
