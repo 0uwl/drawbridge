@@ -107,10 +107,19 @@ pre-establish trust for a self-signed cert ahead of it — confirmed against
 real C9200CX hardware (see [decisions.md](decisions.md), "HTTPS cert trust
 on C9200CX"). Not baked into the image: `scripts/ztp-base.py` has
 deployment-specific constants (`DRAWBRIDGE_HOST`, `DRAWBRIDGE_CA_CERT_PEM`)
-every operator must hand-edit before it's usable against real hardware, so
+every operator must get right before it's usable against real hardware, so
 `install.sh` seeds it once into `~/.local/share/drawbridge/files/scripts/ztp-base.py`
 on first install (never overwriting an already-edited copy on a re-run) and
-the container bind-mounts that directory read-only — one script, no
+the container bind-mounts that directory read-only. `install.sh` sets
+`DRAWBRIDGE_HOST` for you automatically, best-effort, from the IPv4 address
+on whichever interface it resolved for Kea (falls back to the placeholder,
+with a note to edit it by hand, if that can't be detected — e.g. no IP
+assigned yet). `DRAWBRIDGE_CA_CERT_PEM` can't be set by `install.sh` the
+same way — there's no cert to read yet at install time, since
+`drawbridge/tls.py` only generates one the first time the `drawbridge`
+container actually starts — but it doesn't need a manual edit either: the
+`drawbridge` container patches it in automatically once it does start (see
+"TLS" below). One script, no
 per-device selection (see [decisions.md](decisions.md) "Facts-first
 provisioning is deferred, not rejected" for why that was removed), but
 still editable in place per deployment. Everything the script does after
@@ -170,10 +179,16 @@ containers must therefore be owned by that user. It's recommended to create a
 folder under that user's own XDG data dir, not a root-owned path like `/srv`,
 so no `sudo`/`chown` is needed.
 
-Must exist before starting:
+`install.sh` creates `~/.local/share/drawbridge/{data,files}` itself (and
+seeds `files/scripts/ztp-base.py` — see "Container" above) — nothing to
+create by hand there. Installing the Quadlet units manually instead of via
+`install.sh` skips that step, so create them yourself first in that case:
 ```bash
 mkdir -p ~/.local/share/drawbridge/{data,files}
 ```
+Either way, these are just the documented default location — move them
+elsewhere afterward if you want, and update the installed Quadlet units'
+`Volume=` lines to match.
 
 Then, after editing `SECRET_KEY` (and `ADMIN_PASSWORD` or `LoadCredential=`)
 in the installed `drawbridge.container` unit:
@@ -237,6 +252,21 @@ otherwise trusted. **Upgrading from a pre-pod install:** delete
 `data/tls/cert.pem` and `data/tls/key.pem` so `ensure_cert()` regenerates
 them with the SAN on next start; an existing no-SAN cert is not replaced
 automatically.
+
+**`scripts/ztp-base.py`'s `DRAWBRIDGE_CA_CERT_PEM` is kept in sync
+automatically** — `drawbridge/tls.py`'s `sync_ztp_script_ca_cert()` runs
+right after `ensure_cert()` on every `drawbridge` container start (cheap
+no-op if nothing changed) and rewrites just the block between the
+`# --- DRAWBRIDGE_CA_CERT_PEM:BEGIN/END ---` markers in the bind-mounted
+ZTP script (`~/.local/share/drawbridge/files/scripts/ztp-base.py`, the
+same file `install.sh` seeds — see "Container" above) with whatever cert
+is actually at `TLS_CERT_PATH`. This also means the "delete
+`cert.pem`/`key.pem` to regenerate" step just above updates the ZTP script
+for free on the next restart. An operator who wants to manage this
+constant by hand instead (e.g. pointing it at an org CA rather than the
+served leaf cert) can just delete the BEGIN/END markers from their copy of
+the script — `sync_ztp_script_ca_cert()` skips any file that doesn't have
+them.
 
 An operator who wants a "real" ACME-issued cert, a WAF, or some other
 reverse proxy in front instead of `drawbridge-nginx` can either (a) mount

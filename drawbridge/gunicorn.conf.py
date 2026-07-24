@@ -2,9 +2,10 @@ import os
 
 from drawbridge.db import _is_sqlite
 from drawbridge.main import DATABASE_PATH as _DEFAULT_DATABASE_PATH
+from drawbridge.main import FILES_PATH as _DEFAULT_FILES_PATH
 from drawbridge.main import TLS_CERT_PATH as _DEFAULT_TLS_CERT_PATH
 from drawbridge.main import TLS_KEY_PATH as _DEFAULT_TLS_KEY_PATH
-from drawbridge.tls import ensure_cert
+from drawbridge.tls import ensure_cert, sync_ztp_script_ca_cert
 
 worker_class = 'gevent'
 
@@ -55,3 +56,12 @@ else:
     _tls_cert_path = os.environ.get('TLS_CERT_PATH', _DEFAULT_TLS_CERT_PATH)
     _tls_key_path = os.environ.get('TLS_KEY_PATH', _DEFAULT_TLS_KEY_PATH)
     ensure_cert(_tls_cert_path, _tls_key_path)
+
+    # Keeps scripts/ztp-base.py's DRAWBRIDGE_CA_CERT_PEM in sync with
+    # whatever cert was just ensured above — see drawbridge/tls.py. Runs
+    # every restart (cheap no-op if nothing changed), which also means an
+    # operator following docs/deployment.md's "delete cert.pem/key.pem to
+    # regenerate" upgrade path gets the ZTP script updated for free too.
+    _files_path = os.environ.get('FILES_PATH', _DEFAULT_FILES_PATH)
+    _ztp_script_path = os.path.join(_files_path, 'scripts', 'ztp-base.py')
+    sync_ztp_script_ca_cert(_tls_cert_path, _ztp_script_path)

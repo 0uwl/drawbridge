@@ -6,6 +6,7 @@ nothing is there yet.
 """
 import datetime
 import ipaddress
+import re
 from pathlib import Path
 
 from cryptography import x509
@@ -69,3 +70,52 @@ def ensure_cert(cert_path: str, key_path: str) -> None:
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption(),
         ))
+
+
+_ZTP_CA_CERT_BEGIN = '# --- DRAWBRIDGE_CA_CERT_PEM:BEGIN ---'
+_ZTP_CA_CERT_END = '# --- DRAWBRIDGE_CA_CERT_PEM:END ---'
+
+
+def sync_ztp_script_ca_cert(cert_path: str, ztp_script_path: str) -> None:
+    """Keeps scripts/ztp-base.py's DRAWBRIDGE_CA_CERT_PEM constant in sync
+    with whatever cert Drawbridge is actually serving (self-signed or
+    operator-supplied at TLS_CERT_PATH — the device-side trust anchor has
+    to match either way), so this doesn't need a manual copy-paste step
+    after every ensure_cert() run. Only rewrites the block between the
+    BEGIN/END markers in the ZTP script (see scripts/ztp-base.py) —
+    everything else in the file, including any real provisioning logic an
+    operator has added, is left untouched. Must run after ensure_cert() so
+    the cert actually exists to read.
+
+    No-op if the ZTP script doesn't exist yet (files/scripts is
+    drawbridge-bootstrap's concern, not guaranteed to exist in every
+    deployment or test) or no longer has the markers (an operator who
+    removed them has opted out of this — see the comment in
+    scripts/ztp-base.py).
+    """
+    script = Path(ztp_script_path)
+    if not script.is_file():
+        return
+
+    content = script.read_text()
+    pattern = re.compile(
+        re.escape(_ZTP_CA_CERT_BEGIN) + r'.*?' + re.escape(_ZTP_CA_CERT_END),
+        re.DOTALL,
+    )
+    if not pattern.search(content):
+        return
+
+    cert_pem = Path(cert_path).read_text()
+    replacement = (
+        f'{_ZTP_CA_CERT_BEGIN}\n'
+        f'DRAWBRIDGE_CA_CERT_PEM = """{cert_pem}"""\n'
+        f'{_ZTP_CA_CERT_END}'
+    )
+
+    # A callable replacement, not a plain string, so any backslash in
+    # cert_pem (never expected in real base64 PEM data, but this writes
+    # into a script that runs against real network devices, worth being
+    # defensive) can't be misread as a regex backreference by re.sub.
+    new_content = pattern.sub(lambda _match: replacement, content, count=1)
+    if new_content != content:
+        script.write_text(new_content)

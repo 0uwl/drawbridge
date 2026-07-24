@@ -156,9 +156,12 @@ is just "forward every line as JSON," genuinely vendor-agnostic.
 ## Device script
 
 `scripts/ztp-base.py`'s `log_to_server(serial, message, platform)` shares
-`report_status`'s PUT-JSON transport (`_put_json`, the same three-way
-C9200CX/other-platform/local-testing dispatch documented in
-[decisions.md](decisions.md)). Called from `main()` at three points: start,
+`report_status`'s PUT-JSON transport (`_put_json`, the same two-way
+C9200CX/other-platform dispatch documented in
+[decisions.md](decisions.md) — no local-testing branch anymore, this
+script now assumes it only ever runs on real Guestshell; see
+`tests/ztp_mock.py` for the `requests`-based simulation used by the test
+suite instead). Called from `main()` at three points: start,
 after the provision-request decision, and on completion. On real hardware,
 the device is also configured to send its own syslog
 (`logging host <drawbridge-ip> transport {udp|tcp} port 10514` — the
