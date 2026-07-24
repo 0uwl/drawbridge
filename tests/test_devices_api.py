@@ -105,7 +105,6 @@ def test_add_device_persists_to_db(app, logged_in_client):
         'description': 'Edge router',
         'image': 'ios-xe-17.9.bin',
         'config_file': 'spine.cfg',
-        'script': 'ztp-spine.py',
     })
     with app.app_context():
         d = get_session().get(Device, 'FJC2517X0AB')
@@ -114,7 +113,6 @@ def test_add_device_persists_to_db(app, logged_in_client):
         assert d.description == 'Edge router'
         assert d.image == 'ios-xe-17.9.bin'
         assert d.config_file == 'spine.cfg'
-        assert d.script == 'ztp-spine.py'
 
 
 def test_add_device_sets_added_by_to_current_user(app, logged_in_client, user):
@@ -161,32 +159,6 @@ def test_add_device_explicit_image_overrides_default(app, logged_in_client):
     with app.app_context():
         d = get_session().get(Device, 'FJC2517X0AB')
         assert d.image == 'ios-xe-custom.bin'
-
-
-def test_add_device_uses_default_script_when_not_provided(app, logged_in_client):
-    with app.app_context():
-        session = get_session()
-        session.add(Setting(key='default_script', value='ztp-base.py'))
-        session.commit()
-
-    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB'})
-
-    with app.app_context():
-        d = get_session().get(Device, 'FJC2517X0AB')
-        assert d.script == 'ztp-base.py'
-
-
-def test_add_device_explicit_script_overrides_default(app, logged_in_client):
-    with app.app_context():
-        session = get_session()
-        session.add(Setting(key='default_script', value='ztp-base.py'))
-        session.commit()
-
-    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'script': 'ztp-spine.py'})
-
-    with app.app_context():
-        d = get_session().get(Device, 'FJC2517X0AB')
-        assert d.script == 'ztp-spine.py'
 
 
 def test_add_device_is_idempotent_on_serial(app, logged_in_client, device):
@@ -240,6 +212,62 @@ def test_get_device_returns_device_payload(logged_in_client, device):
     payload = response.get_json()['payload']
     assert payload['serial'] == device.serial
     assert payload['mac'] == device.mac
+
+
+# PUT /api/v1/devices/<serial>
+
+def test_edit_device_returns_401_when_not_logged_in(client, device):
+    response = client.put(f'{BASE}/devices/{device.serial}', json={'description': 'Updated'})
+    assert response.status_code == 401
+
+
+def test_edit_device_returns_404_when_not_found(logged_in_client):
+    response = logged_in_client.put(f'{BASE}/devices/NOSUCHSERIAL', json={'description': 'Updated'})
+    assert response.status_code == 404
+    assert response.get_json()['error'] == 'device_not_found'
+
+
+def test_edit_device_does_not_create_a_new_device(app, logged_in_client):
+    logged_in_client.put(f'{BASE}/devices/NOSUCHSERIAL', json={'description': 'Updated'})
+    with app.app_context():
+        assert get_session().get(Device, 'NOSUCHSERIAL') is None
+
+
+def test_edit_device_updates_fields(app, logged_in_client, device):
+    response = logged_in_client.put(f'{BASE}/devices/{device.serial}', json={
+        'mac': '11:22:33:44:55:66',
+        'description': 'Updated description',
+        'image': 'ios-xe-17.12.bin',
+        'config_file': 'edge.cfg',
+    })
+    assert response.status_code == 200
+    payload = response.get_json()['payload']
+    assert payload['mac'] == '11:22:33:44:55:66'
+    assert payload['description'] == 'Updated description'
+    assert payload['image'] == 'ios-xe-17.12.bin'
+    assert payload['config_file'] == 'edge.cfg'
+
+    with app.app_context():
+        d = get_session().get(Device, device.serial)
+        assert d.mac == '11:22:33:44:55:66'
+        assert d.description == 'Updated description'
+        assert d.image == 'ios-xe-17.12.bin'
+        assert d.config_file == 'edge.cfg'
+
+
+def test_edit_device_clears_fields_omitted_from_body(app, logged_in_client, device):
+    """PUT replaces the editable fields wholesale, same as the rest of this
+    API's PUT routes (e.g. settings/users) — it isn't a partial PATCH."""
+    logged_in_client.put(f'{BASE}/devices/{device.serial}', json={})
+    with app.app_context():
+        d = get_session().get(Device, device.serial)
+        assert d.mac is None
+        assert d.description is None
+
+
+def test_edit_device_does_not_change_serial(logged_in_client, device):
+    response = logged_in_client.put(f'{BASE}/devices/{device.serial}', json={'description': 'Updated'})
+    assert response.get_json()['payload']['serial'] == device.serial
 
 
 # DELETE /api/v1/devices/<serial>

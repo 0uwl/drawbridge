@@ -54,11 +54,14 @@ above), so an attacker who knows a serial can call it themselves from their
 own IP, then immediately pull the image/config from that same IP — this
 closes the "cold fetch by anyone, no session at all" gap and the
 first-claim-wins race it made worse, but it doesn't close the race itself
-(see [beta.md](../beta.md) §7). `GET /files/scripts/<filename>` stays
-unauthenticated and session-less on purpose — the generic ZTP script is
-fetched via DHCP Option 67 before any serial is known, so gating it isn't
-possible without breaking the boot bootstrap itself; this is fine since it
-carries nothing device- or config-specific.
+(see [beta.md](../beta.md) §7). The ZTP script itself isn't served through
+this Flask app at all — it's a single fixed file baked into the separate
+`drawbridge-bootstrap` container, served unauthenticated over plain HTTP on
+`:8090` (see [deployment.md](deployment.md) and [decisions.md](decisions.md),
+"HTTPS cert trust on C9200CX"). That fetch happens via DHCP Option 67 before
+any serial is known, so gating it isn't possible without breaking the boot
+bootstrap itself; this is fine since it carries nothing device- or
+config-specific and is identical for every device.
 
 This means the actual startup-config content is still exposed to whoever
 wins that race, not just its existence. If a device relies on

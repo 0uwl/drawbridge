@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Removes every trace of a Drawbridge install: stops and removes the pod
 # and its containers, deletes the Quadlet unit files, deletes the data
-# directory (SQLite DB, TLS cert/key, uploaded images/configs/scripts), and
+# directory (SQLite DB, TLS cert/key, uploaded images/configs), and
 # removes the Kea configuration install.sh deployed. Leaves podman, Kea's
-# packages, and the two pulled container images alone — re-running
+# packages, and the three pulled container images alone — re-running
 # install.sh afterwards is a genuinely fresh install with nothing carried
 # over from whatever version was here before. Meant to be run before every
 # reinstall when testing a new version, not just once.
@@ -50,8 +50,8 @@ fi
 
 quadlet_dir="$HOME/.config/containers/systemd"
 quadlet_container_file="$quadlet_dir/drawbridge.container"
-QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container)
-KEA_CONF_FILES=(/etc/kea/kea-dhcp4.conf /etc/kea/kea-ctrl-agent.conf /etc/kea/kea-api-password)
+QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container drawbridge-bootstrap.container)
+KEA_CONF_FILES=(/etc/kea/kea-dhcp4.conf /etc/kea/kea-ctrl-agent.conf /etc/kea/kea-api-password /etc/rsyslog.d/49-drawbridge-kea.conf)
 
 # Volume=%h/.local/share/drawbridge/data:/app/data:Z is editable - an
 # operator can point /app/data and/or /app/files at wherever they want (see
@@ -117,7 +117,7 @@ if [ -d "$app_data_dir" ]; then
     echo "  - $app_data_dir (database, TLS cert/key)"
 fi
 if [ -d "$app_files_dir" ]; then
-    echo "  - $app_files_dir (uploaded images/configs/scripts)"
+    echo "  - $app_files_dir (uploaded images/configs)"
 fi
 echo
 if [ "$kea_config_found" -eq 1 ]; then
@@ -127,7 +127,8 @@ if [ "$kea_config_found" -eq 1 ]; then
     echo
 fi
 echo "Left alone: podman, the Kea packages, and the pulled"
-echo "ghcr.io/0uwl/drawbridge:latest / ghcr.io/0uwl/drawbridge-rsyslog:latest images."
+echo "ghcr.io/0uwl/drawbridge:latest / ghcr.io/0uwl/drawbridge-rsyslog:latest /"
+echo "ghcr.io/0uwl/drawbridge-bootstrap:latest images."
 echo "Backup files (*.bak.*) from previous installs/upgrades are left alone too -"
 echo "remove those by hand if you don't want them."
 echo
@@ -150,13 +151,13 @@ echo "==> Stopping and removing the Drawbridge pod"
 # Quadlet files are gone, so disabling here is about a clean stop this
 # session, not something that needs to survive that reload.
 systemctl --user disable --now drawbridge-pod.service >/dev/null 2>&1 || true
-systemctl --user reset-failed drawbridge-pod.service drawbridge.service drawbridge-rsyslog.service >/dev/null 2>&1 || true
+systemctl --user reset-failed drawbridge-pod.service drawbridge.service drawbridge-rsyslog.service drawbridge-bootstrap.service >/dev/null 2>&1 || true
 # Belt-and-suspenders: clean up by name too, in case the pod was ever
 # started by hand (podman pod create/run) instead of via the unit above.
 # Only ever removes the pod/containers, never an image - no -i/--rmi flag
 # anywhere in this script.
 podman pod rm -f drawbridge >/dev/null 2>&1 || true
-podman rm -f drawbridge drawbridge-rsyslog >/dev/null 2>&1 || true
+podman rm -f drawbridge drawbridge-rsyslog drawbridge-bootstrap >/dev/null 2>&1 || true
 
 echo "==> Removing Quadlet unit files"
 for f in "${QUADLET_FILES[@]}"; do
@@ -196,6 +197,7 @@ if [ "$kea_config_found" -eq 1 ]; then
         # deleted, not systemd's separate enabled/disabled bookkeeping.
         sudo systemctl stop kea-dhcp4-server kea-ctrl-agent 2>/dev/null || true
         sudo rm -f "${KEA_CONF_FILES[@]}"
+        sudo systemctl reload-or-restart rsyslog 2>/dev/null || true
         kea_config_removed=1
     else
         echo "==> Leaving /etc/kea alone (pass --remove-kea-config to also remove it non-interactively)"

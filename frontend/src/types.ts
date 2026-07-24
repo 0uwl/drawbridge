@@ -19,7 +19,6 @@ export interface Device {
   description: string | null
   image: string | null
   config_file: string | null
-  script: string | null
   added_at: string
   added_by: string | null
 }
@@ -94,7 +93,7 @@ export type LoginResponse = { must_reset_password: true; username: string } | Au
 export type ClaimTokenResponse = AdminUser & { claim_token: string }
 
 // --- frontend-only unions ---
-export type FileType = 'image' | 'config' | 'script'
+export type FileType = 'image' | 'config'
 export type UploadStatus = 'queued' | 'uploading' | 'done' | 'error' | 'canceled'
 
 // --- frontend-only composite shapes ---
@@ -117,6 +116,7 @@ export interface StagedFile {
 
 // --- create-payload shapes ---
 export type DeviceCreatePayload = Omit<Device, 'added_at' | 'added_by'>
+export type DeviceUpdatePayload = Pick<Device, 'mac' | 'description' | 'image' | 'config_file'>
 export type UserCreatePayload = Pick<AdminUser, 'username' | 'role'>
 
 // --- axios augmentation for the custom skip401Redirect request flag ---

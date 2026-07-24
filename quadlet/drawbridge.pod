@@ -1,15 +1,15 @@
-# Owns the shared network namespace and published ports for both
+# Owns the shared network namespace and published ports for all three
 # containers in the pod (quadlet/drawbridge.container,
-# quadlet/drawbridge-rsyslog.container) — Podman 5.0+ required for .pod
-# Quadlet unit support (the Pod= key on .container units, and this file's
-# own generation, both landed in 5.0; older Podman fails with "unsupported
-# key 'Pod' in group 'Container'").
+# quadlet/drawbridge-rsyslog.container, quadlet/drawbridge-bootstrap.container)
+# — Podman 5.0+ required for .pod Quadlet unit support (the Pod= key on
+# .container units, and this file's own generation, both landed in 5.0;
+# older Podman fails with "unsupported key 'Pod' in group 'Container'").
 #
 # install.sh installs this automatically alongside the other two unit
 # files (skipped if a unit already exists, so an edited copy is never
 # overwritten). To install by hand instead, rootless as the user that will
 # run the containers:
-#   cp quadlet/drawbridge.pod quadlet/drawbridge.container quadlet/drawbridge-rsyslog.container ~/.config/containers/systemd/
+#   cp quadlet/drawbridge.pod quadlet/drawbridge.container quadlet/drawbridge-rsyslog.container quadlet/drawbridge-bootstrap.container ~/.config/containers/systemd/
 #   # fill in SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) in drawbridge.container
 #   systemctl --user daemon-reload
 #   systemctl --user start drawbridge-pod.service
@@ -43,8 +43,22 @@ PublishPort=8080:8080
 PublishPort=10514:10514/udp
 PublishPort=10514:10514/tcp
 
+# Kea's own DHCP server logs (lease grants, errors), forwarded here by
+# kea/rsyslog-kea-forward.conf on the host — a second, separate
+# drawbridge-rsyslog listener from device syslog above, not sharing :10514,
+# since the two log sources have no correlation in common. TCP only. See
+# docs/logging.md.
+PublishPort=10515:10515/tcp
+
+# drawbridge-bootstrap: plain, unauthenticated HTTP serving of the ZTP
+# script only — see docs/decisions.md ("HTTPS cert trust on C9200CX") for
+# why this exists as a separate, deliberately non-TLS endpoint rather than
+# reusing gunicorn's HTTPS listener. Unprivileged port, distinct from :8080
+# (gunicorn) and :10514 (rsyslog).
+PublishPort=8090:8090
+
 # Required for the bind mounts (declared on the member .container units)
-# to be writable. Both images run as fixed UID 1000, but rootless Podman's
+# to be writable. All three images run as fixed UID 1000, but rootless Podman's
 # default user namespace does not map that 1:1 to the host: even when the
 # invoking host user is also UID 1000, the containers see the bind-mounted
 # directory as a different, non-writable owner. keep-id fixes the mapping

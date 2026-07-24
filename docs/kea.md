@@ -25,7 +25,12 @@ avoids entirely).
   differently** — they need different DHCP options pointing at different
   boot mechanisms, so a single global `option-data` block can't serve both.
   Kea's per-class `option-data` is the mechanism: `cisco-devices` carries
-  Option 67 (`boot-file-name`) pointing at `scripts/ztp-base.py`;
+  Option 67 (`boot-file-name`) pointing at the `drawbridge-bootstrap`
+  container's plain-HTTP listener (`http://<host>:8090/ztp-base.py` —
+  not Drawbridge's own HTTPS listener; see [deployment.md](deployment.md)
+  "Container" and [decisions.md](decisions.md) "HTTPS cert trust on
+  C9200CX" for why). There is exactly one ZTP script, baked into that
+  image at build time — no per-device script selection exists;
   `juniper-devices` has no `option-data` yet — Junos ZTP support is future
   work, explicitly out of scope for alpha — but is already admitted to the
   pool so adding it later is additive (one `option-data` block on that

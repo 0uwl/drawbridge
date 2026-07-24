@@ -27,7 +27,6 @@ class Device(Base):
     description: Mapped[str | None]
     image: Mapped[str | None]
     config_file: Mapped[str | None]
-    script: Mapped[str | None]
     added_at: Mapped[str] = mapped_column(default=utcnow_iso)
     added_by: Mapped[str | None]
 
@@ -38,7 +37,6 @@ class Device(Base):
             'description': self.description,
             'image': self.image,
             'config_file': self.config_file,
-            'script': self.script,
             'added_at': self.added_at,
             'added_by': self.added_by,
         }
@@ -147,6 +145,28 @@ class DeviceLogEntry(Base):
         }
 
 
+class KeaLogEntry(Base):
+    """Kea's own DHCP server logs (lease grants, config errors — not
+    device-authored content), forwarded via a second drawbridge-rsyslog
+    listener (:10515, separate from device syslog's :10514 — see
+    docs/logging.md). No serial/device correlation exists for these lines,
+    unlike DeviceLogEntry — this is host-daemon operational log, not
+    per-device content. Subject to the same retention policy as
+    ProvisioningLog/DeviceLogEntry."""
+    __tablename__ = 'kea_logs'
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    message: Mapped[str]
+    timestamp: Mapped[str] = mapped_column(default=utcnow_iso, index=True)  # purge_expired_kea_logs range-scans this
+
+    def as_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'message': self.message,
+            'timestamp': self.timestamp,
+        }
+
+
 class Setting(Base):
     """Small admin-configurable key/value store. First row of interest:
     key='log_retention_days', value='30' (or 'indefinite')."""
@@ -161,7 +181,7 @@ class Setting(Base):
 class ZTPFile(Base):
     __tablename__ = 'ztp_files'
 
-    file_type:   Mapped[str] = mapped_column(primary_key=True)  # 'image', 'config', 'script'
+    file_type:   Mapped[str] = mapped_column(primary_key=True)  # 'image', 'config'
     filename:    Mapped[str] = mapped_column(primary_key=True)
     size_bytes:  Mapped[int]
     sha256:      Mapped[str]

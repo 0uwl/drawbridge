@@ -16,13 +16,11 @@ CHUNK_SIZE = 64 * 1024
 ALLOWED_EXTENSIONS = {
     'image':  {'bin', 'spa', 'pkg', 'tar'},
     'config': {'cfg', 'conf', 'txt'},
-    'script': {'py', 'tcl', 'sh'},
 }
 
 _TYPE_SUBDIR = {
     'image':  'images',
     'config': 'configs',
-    'script': 'scripts',
 }
 
 
@@ -44,12 +42,14 @@ def _handle_list(file_type: str):
 
 
 def _handle_serve(file_type: str, filename: str):
-    """Unauthenticated — devices fetch files over HTTP during ZTP. Images
-    and configs additionally require the caller's IP to match an active
-    ProvisioningSession (beta.md §7); scripts stay ungated since they're
-    fetched via DHCP Option 67 before any serial/session exists."""
+    """Unauthenticated — devices fetch files over HTTP during ZTP. Requires
+    the caller's IP to match an active ProvisioningSession (beta.md §7). The
+    ZTP script itself is not served this way — it's fetched via DHCP Option
+    67 from the separate drawbridge-bootstrap container before any
+    serial/session exists (see docs/decisions.md, "HTTPS cert trust on
+    C9200CX")."""
     db_session = get_session()
-    if file_type != 'script' and find_active_session_by_ip(db_session, request.remote_addr) is None:
+    if find_active_session_by_ip(db_session, request.remote_addr) is None:
         return error_response(
             'No active provisioning session for this request', 'no_active_session', code=403, silent=True,
         )
@@ -200,26 +200,6 @@ def create_blueprint():
             case 'DELETE':
                 assert filename is not None  # DELETE route always binds <filename>
                 return _handle_delete('config', filename)
-            case _:
-                return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
-
-    @bp.route('/scripts', defaults={'filename': None}, methods=['GET', 'POST'])
-    @bp.route('/scripts/<path:filename>', methods=['GET', 'PUT', 'DELETE'])
-    def scripts(filename=None):
-        if request.method != 'GET' or filename is None:
-            if err := _require_auth():
-                return err
-        match request.method:
-            case 'GET':
-                return _handle_serve('script', filename) if filename else _handle_list('script')
-            case 'POST':
-                return _handle_upload('script')
-            case 'PUT':
-                assert filename is not None  # PUT route always binds <filename>
-                return _handle_update_hash('script', filename)
-            case 'DELETE':
-                assert filename is not None  # DELETE route always binds <filename>
-                return _handle_delete('script', filename)
             case _:
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 

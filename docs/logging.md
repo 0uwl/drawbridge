@@ -8,6 +8,10 @@ serial. This is distinct from `ProvisioningLog` (see
 structured provisioning-*outcome* audit trail (one row per completed/failed/
 cancelled run); this is a raw, high-volume live log feed.
 
+Kea's own DHCP server logs are a separate, third source, covered in "Kea
+server logs" below — deliberately not folded into `DeviceLogEntry` or its
+`:10514` listener, since Kea's logs carry no device correlation at all.
+
 **Decision: a separate `drawbridge-rsyslog` container in the same pod, not
 in-container via a process supervisor.** An earlier version ran rsyslog
 in-container under s6-overlay, specifically to avoid introducing a
@@ -27,8 +31,10 @@ GUI session with it) down with it, the way one s6 service failing used to.
 
 Pod `drawbridge` (`quadlet/drawbridge.pod`, **requires Podman 5.0+** — `.pod`
 Quadlet units and the `Pod=` key on `.container` units both landed in that
-release) contains two containers, sharing a network namespace but not a
-filesystem or container-name DNS:
+release) has `drawbridge-rsyslog` as one of its members, sharing a network
+namespace with the app container (and the unrelated `drawbridge-bootstrap`
+container — see [deployment.md](deployment.md)) but not a filesystem or
+container-name DNS:
 
 - **`drawbridge`** (`Containerfile`) — the app itself, `ENTRYPOINT`
   running `gunicorn` directly, no supervisor.
@@ -180,3 +186,81 @@ point). Polls `GET /device-logs` every 2s via the shared
 after that uses `after_id` to fetch and prepend only what's new, so a
 long-running session's log view doesn't re-fetch and re-render its whole,
 growing history on every tick.
+
+## Kea server logs
+
+A second, independent pipeline (v0.3.1) for Kea's own DHCP server logs
+(lease grants, config errors) — not device-authored content, and not
+folded into anything above.
+
+**Why a separate pipeline, not a `source='kea'` value on `DeviceLogEntry`
+sharing `:10514`:** device syslog is IP-correlated to a
+`ProvisioningSession` (`find_active_session_by_ip`); Kea's own logs have no
+serial/session/IP-of-a-provisioned-device relationship to correlate against
+at all — they're host-daemon operational logs. Branching on `programname`
+inside `container/rsyslog-drawbridge.conf` to route to a different REST
+path would work, but cuts against this file's own stated design principle
+above ("no per-vendor branching in rsyslog config at all — that knowledge
+lives in Python"): reusing one rsyslog config for two structurally
+different jobs is the same shape of mistake in a different place. A second
+listener, in the same container, keeps each pipeline a straight line.
+
+**Kea-side:** unlike device syslog (which devices are configured to send
+directly), Kea's logging backend (log4cplus) only supports **local** syslog
+output — no direct remote host:port option. `kea/kea-dhcp4.conf` and
+`kea/kea-ctrl-agent.conf` both carry a `"loggers"` block outputting to
+`syslog:local0` — facility `local0` specifically so the host-side rule
+below can select just these lines without guessing at `programname`.
+
+**Host-side forwarding:** Kea itself is not containerized (see
+[decisions.md](decisions.md) — rootless Podman can't do the raw DHCP
+broadcast socket Kea needs), so it runs as a native systemd service and its
+`local0` syslog output needs one hop to reach the pod. `kea/rsyslog-kea-forward.conf`
+(repo-tracked, installed by `install.sh` to `/etc/rsyslog.d/49-drawbridge-kea.conf`,
+alongside `kea/*.conf` going to `/etc/kea/`) matches `local0.*` and forwards
+via `omfwd` (`@@127.0.0.1:10515`, TCP) — deliberately without a `stop`
+directive after it, so these lines still reach the host's normal default
+logging (`/var/log/syslog` or equivalent) too; this rule adds a copy into
+Drawbridge, it doesn't redirect Kea's local logging away.
+
+**Container layer:** `container/rsyslog-drawbridge.conf` binds a second
+`imtcp` input on **`:10515`** to its own ruleset (`kealogs`), kept separate
+from the default ruleset the `:10514` device-syslog input uses. Its
+`omhttp` action POSTs `{"message": "<msg>"}` (no `ip` property — nothing to
+correlate) to `POST /api/v1/kea-logs`, same TLS posture
+(`allowunsignedcerts="on"`, loopback-only connection) as the device-logs
+action. `quadlet/drawbridge.pod` publishes `10515:10515/tcp` alongside the
+existing `10514` ports.
+
+**Data model:**
+
+```python
+class KeaLogEntry(Base):
+    __tablename__ = 'kea_logs'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    message: Mapped[str]
+    timestamp: Mapped[str] = mapped_column(default=utcnow_iso, index=True)
+```
+
+No `serial` column — see "Why a separate pipeline" above. Purged by the
+same `log_retention_days` `Setting` row, via the same
+lazy-purge-on-insert pattern (`queries.py`'s `add_kea_log_entry`/
+`purge_expired_kea_logs`) as `DeviceLogEntry`/`ProvisioningLog` — no
+early-clear-on-success behavior, since a Kea log line was never tied to one
+device's run to begin with. See [database.md](database.md), "Log Retention
+& Data Minimisation".
+
+**API:**
+
+- **`GET /api/v1/kea-logs`** (`drawbridge/api/kea_logs.py`,
+  `@login_required`) — returns `KeaLogEntry` rows, most recent first.
+  Optional `after_id`, same polling semantics as `GET /device-logs`. No
+  `serial` filter — there's nothing to filter by.
+- **`POST /api/v1/kea-logs`** (same file, no auth decorator — same posture
+  as `POST /device-logs`: the rsyslog forwarder has no operator session to
+  authenticate with) — `{"message": "..."}` only.
+
+**GUI: not built yet.** This release only gets Kea's logs into a
+queryable table/endpoint — where and how to surface them (a new tab, folded
+into an existing view, something else) is an open question for a follow-up,
+deliberately left unresolved here rather than guessed at.

@@ -53,7 +53,16 @@ Provisioning VLAN
 │  │  (/api/provision-request)                   │    │
 │  │                                             │    │
 │  │  /app/data     (Database, certs)            │    │
-│  │  /app/files    (images/configs/scripts)     │    │
+│  │  /app/files    (images/configs)             │    │
+│  └─────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  drawbridge-bootstrap container              │    │
+│  │  image: localhost/drawbridge-bootstrap:latest│    │
+│  │                                             │    │
+│  │  busybox httpd, plain HTTP, port 8090       │    │
+│  │  Serves scripts/ztp-base.py (baked in at    │    │
+│  │  build time) — the one fetch that happens   │    │
+│  │  before any script code can validate a cert │    │
 │  └─────────────────────────────────────────────┘    │
 │                                                     │
 │  Host bind mounts:                                  │
@@ -83,19 +92,22 @@ substitute for the script-level gate below.
 1. IOS XE device boots with no startup config, sends DHCPDISCOVER
 2. Kea leases an address from the dynamic pool to any client matching the
    vendor-class filter and, for Cisco, returns Option 67 pointing at the
-   generic ZTP script — every matching Cisco device gets this, registered
-   or not
-3. Device fetches the ZTP script over HTTPS. Drawbridge terminates its own
-   TLS (self-signed by default — see [deployment.md](deployment.md) "TLS").
-   Server cert verification for subsequent device-initiated requests
-   (phone-home, completion callback) is real: on C9200CX, via an IOS XE
-   trustpoint imported by the script itself before its first HTTPS call
-   (Guestshell has no network stack of its own there); on other platforms,
-   directly in Python via `ssl.create_default_context(cadata=...)`. Whether
-   this very first script-delivery fetch itself validates the cert is
-   unconfirmed without lab hardware — see [decisions.md](decisions.md)
-   ("C9200CX network stack isolation" addendum). Payload hash verification
-   is still planned, not yet implemented (see [beta.md](../beta.md)).
+   one fixed ZTP script — every matching Cisco device gets the same script,
+   registered or not
+3. Device fetches the ZTP script over **plain HTTP**, from the separate
+   `drawbridge-bootstrap` container on `:8090` — not from Drawbridge's own
+   HTTPS listener. This fetch happens before any script code has run, so
+   there's no way to pre-establish trust for a self-signed cert ahead of
+   it; whether the boot agent's plain-HTTP fetch itself behaves as assumed
+   is still unconfirmed without lab hardware (see [decisions.md](decisions.md),
+   "HTTPS cert trust on C9200CX"). Every *subsequent* device-initiated
+   request (phone-home, completion callback) goes back over real HTTPS
+   against Drawbridge's own listener, with server cert verification: on
+   C9200CX, via an IOS XE trustpoint imported by the script itself before
+   its first HTTPS call (Guestshell has no network stack of its own there);
+   on other platforms, directly in Python via
+   `ssl.create_default_context(cadata=...)`. Payload hash verification is
+   still planned, not yet implemented (see [beta.md](../beta.md)).
 4. Script's first action: reads its own serial via `show version`, calls
    `GET /api/provision-request?serial=...`
 5. Drawbridge checks the SQLite allowlist by serial — known → 200 + a
@@ -124,6 +136,7 @@ drawbridge/
 ├── docs/                      <- detailed design docs (this file and siblings)
 ├── Containerfile               <- builds localhost/drawbridge:latest (multi-stage: builds frontend/, then the Flask image)
 ├── Containerfile.rsyslog       <- builds localhost/drawbridge-rsyslog:latest (Alpine + rsyslog, see logging.md)
+├── Containerfile.bootstrap     <- builds localhost/drawbridge-bootstrap:latest (busybox httpd serving the ZTP script, see deployment.md)
 ├── frontend/                  <- Vue 3 + Vite admin UI, baked into drawbridge/static at build time (see frontend.md)
 │   ├── package.json
 │   ├── vite.config.js
@@ -131,10 +144,11 @@ drawbridge/
 │   └── src/
 │       ├── main.js
 │       └── App.vue
-├── quadlet/                    <- Podman Quadlet units, one pod + two containers (see deployment.md)
+├── quadlet/                    <- Podman Quadlet units, one pod + three containers (see deployment.md)
 │   ├── drawbridge.pod
 │   ├── drawbridge.container
-│   └── drawbridge-rsyslog.container
+│   ├── drawbridge-rsyslog.container
+│   └── drawbridge-bootstrap.container
 ├── kea/
 │   ├── kea-dhcp4.conf         <- Kea DHCPv4 configuration (vanilla — no hook)
 │   └── kea-ctrl-agent.conf    <- Kea Control Agent (REST API, 127.0.0.1:8081; operator diagnostics only)

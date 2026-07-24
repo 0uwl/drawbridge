@@ -15,6 +15,7 @@ from drawbridge.queries import (
     get_provisioning_session,
     list_devices,
     list_sessions,
+    update_device,
 )
 from drawbridge.utils import error_response, success_response
 
@@ -46,7 +47,6 @@ def create_blueprint():
                     description=data.get('description'),
                     image=data.get('image'),
                     config_file=data.get('config_file'),
-                    script=data.get('script'),
                     added_by=current_user.username,
                 )
                 session.commit()
@@ -55,7 +55,7 @@ def create_blueprint():
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
 
-    @bp.route('/<string:serial>', methods=['GET', 'DELETE'])
+    @bp.route('/<string:serial>', methods=['GET', 'PUT', 'DELETE'])
     @login_required
     def device_actions(serial: str):
         session = get_session()
@@ -66,6 +66,19 @@ def create_blueprint():
         match (request.method):
             case 'GET':
                 return success_response(f'{serial} delivered', payload=device.as_dict(), level=logging.DEBUG)
+
+            case 'PUT':
+                data = request.get_json(silent=True) or {}
+                updated = update_device(
+                    session,
+                    serial,
+                    mac=data.get('mac'),
+                    description=data.get('description'),
+                    image=data.get('image'),
+                    config_file=data.get('config_file'),
+                )
+                session.commit()
+                return success_response(f'{serial} updated', payload=updated.as_dict())
 
             case 'DELETE':
                 if get_provisioning_session(session, serial) is not None:

@@ -1,0 +1,22 @@
+# Pod member — see quadlet/drawbridge.pod for the pod-level settings
+# shared with drawbridge.container/drawbridge-rsyslog.container
+# (PublishPort=, UserNS=) and for install/host-prep instructions. See
+# docs/decisions.md ("HTTPS cert trust on C9200CX") for why this container
+# exists at all.
+
+[Unit]
+Description=Drawbridge ZTP script bootstrap server
+
+[Container]
+Image=ghcr.io/0uwl/drawbridge-bootstrap:latest
+ContainerName=drawbridge-bootstrap
+Pod=drawbridge.pod
+
+# No volume mount: the ZTP script is baked into the image at build time
+# (Containerfile.bootstrap), not admin-uploaded, so there's nothing on the
+# host to bind-mount and no ordering dependency on drawbridge.container
+# having created any host directory first.
+ReadOnly=true
+
+[Service]
+Restart=on-failure

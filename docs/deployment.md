@@ -59,7 +59,7 @@ part of the deployment, not an optional hardening step layered on later.
 
 ## Container
 
-**Requires Podman 5.0+.** The pod runs as two images, described by three
+**Requires Podman 5.0+.** The pod runs as three images, described by four
 Quadlet unit files (below) — `.pod` Quadlet units, and the `Pod=` key on
 `.container` units, both landed in Podman 5.0. Older Podman fails with
 `unsupported key 'Pod' in group 'Container'`.
@@ -95,11 +95,26 @@ privileged port and both images run as non-root UID 1000 throughout (no
 `CAP_NET_BIND_SERVICE`). See [logging.md](logging.md) for the full
 container-layer and rsyslog-config design.
 
+**`Containerfile.bootstrap`** builds `localhost/drawbridge-bootstrap:latest`
+— a separate, single-stage `busybox:musl` image with `scripts/ztp-base.py`
+`COPY`ed in at build time and served over plain, unauthenticated HTTP by
+busybox's built-in `httpd` applet on **:8090**. This exists purely to break
+one chicken-and-egg fetch: DHCP Option 67's `boot-file-name` fetch happens
+before any ZTP script code has run on the device, so there's no way to
+pre-establish trust for a self-signed cert ahead of it — confirmed against
+real C9200CX hardware (see [decisions.md](decisions.md), "HTTPS cert trust
+on C9200CX"). No volume mount — the script is baked into the image and
+versioned with the release, not admin-uploaded (see [decisions.md](decisions.md)
+"Facts-first provisioning is deferred, not rejected" for why per-device
+script selection was removed). Everything the script does after that first
+fetch — phone-home, completion callback, log push, file downloads — still
+goes over HTTPS against the main `drawbridge` container.
+
 **Quadlet**, at `~/.config/containers/systemd/`, run as whichever user
 invokes it — there's no dedicated `drawbridge` system user:
 - `quadlet/drawbridge.pod` — owns the pod's shared network namespace,
-  `PublishPort=` (`8080` and `10514/udp`+`/tcp`), and `UserNS=keep-id` for
-  both member containers' bind mounts.
+  `PublishPort=` (`8080`, `8090`, `10514/udp`+`/tcp`, and `10515/tcp`), and
+  `UserNS=keep-id` for member containers' bind mounts.
 - `quadlet/drawbridge.container` — the app, `Pod=drawbridge.pod`; otherwise
   the same `Volume=`/`Environment=`/`ReadOnly=true`/`Tmpfs=` as before the
   pod split.
@@ -109,8 +124,12 @@ invokes it — there's no dedicated `drawbridge` system user:
   independent of the app container — a crashed `drawbridge-rsyslog` no
   longer takes `drawbridge` down with it, unlike the old single-container/
   s6 setup.
+- `quadlet/drawbridge-bootstrap.container` — the ZTP script server,
+  `Pod=drawbridge.pod`, no volume mount (the script is baked into the image
+  — see above), `ReadOnly=true`, `Restart=on-failure` independent of the
+  other two containers.
 
-[install.sh](../install.sh) installs all three there automatically for the
+[install.sh](../install.sh) installs all four there automatically for the
 user running the script (run it as yourself, not as root/via `sudo` — it
 calls `sudo` itself only for the steps that need it); if a unit is already
 present and differs, it prompts to back up the old one before overwriting
@@ -136,12 +155,12 @@ Starting the pod service starts both member containers together.
 
 **[uninstall.sh](../uninstall.sh)** reverses everything `install.sh` deploys
 except the packages and the pulled images: stops and removes the pod and
-its containers, deletes the three Quadlet unit files, deletes the `/app/data`
+its containers, deletes the four Quadlet unit files, deletes the `/app/data`
 and `/app/files` host directories (database, TLS cert/key, uploaded
-images/configs/scripts), and removes the Kea config under `/etc/kea` that
+images/configs), and removes the Kea config under `/etc/kea` that
 `install.sh` wrote there — `podman`, the Kea packages themselves, and
-`ghcr.io/0uwl/drawbridge:latest`/`-rsyslog:latest` in local podman storage
-are all left alone. Those host directories default to
+`ghcr.io/0uwl/drawbridge:latest`/`-rsyslog:latest`/`-bootstrap:latest` in
+local podman storage are all left alone. Those host directories default to
 `~/.local/share/drawbridge/{data,files}`, but since the `Volume=` lines
 above are editable, `uninstall.sh` reads the *installed*
 `drawbridge.container` unit's actual `Volume=` lines to find the real
@@ -155,9 +174,15 @@ schema, cert, or config lingers into the fresh install.
 
 ## TLS
 
-Drawbridge terminates its own TLS by default — both GUI and device-facing
-(ZTP phone-home, file downloads) traffic go through the same HTTPS listener.
-On first run, if `TLS_CERT_PATH`/`TLS_KEY_PATH` don't already exist,
+Drawbridge terminates its own TLS by default — GUI and most device-facing
+traffic (ZTP phone-home, provision-complete, file downloads) go through the
+same HTTPS listener. The one exception is the very first fetch, the ZTP
+script itself: DHCP Option 67's `boot-file-name` fetch happens before any
+script code has run, so there's no way to pre-establish cert trust ahead of
+it — that one fetch goes to the separate, deliberately plain-HTTP
+`drawbridge-bootstrap` container on `:8090` instead (see "Container" above
+and [decisions.md](decisions.md), "HTTPS cert trust on C9200CX"). On first
+run, if `TLS_CERT_PATH`/`TLS_KEY_PATH` don't already exist,
 `drawbridge/tls.py` generates a self-signed cert/key pair there; an operator
 who mounts their own cert/key pair at those paths instead (e.g. a real
 ACME-issued cert, or a shared org CA) has it used as-is — nothing is
@@ -385,7 +410,7 @@ podman manifest push drawbridge-manifest <registry>/drawbridge:latest
 | `DRAWBRIDGE_PORT` | `8080` | Port Gunicorn binds to (`drawbridge/gunicorn.conf.py`) in production, and the port `flask run --port` / `dev.sh` use in local dev. `frontend/vite.config.js`'s dev-server proxy reads the same variable so it targets the right backend port automatically. **Not** read by `kea/kea-dhcp4.conf`'s Option 67 URL or `scripts/ztp-base.py`'s own `DRAWBRIDGE_PORT` constant — those are static/device-side and must be updated by hand if this changes from its default (see [decisions.md](decisions.md)) |
 | `DATABASE_PATH` | `/app/data/drawbridge.db` | SQLite database file path, or a full SQLAlchemy URL (e.g. `postgresql+psycopg://user:pass@host/dbname`) to use PostgreSQL instead — see [database.md](database.md) |
 | `WORKERS` | `4` | Number of Gunicorn worker processes. Ignored (forced to `1`) when `DATABASE_PATH` resolves to SQLite — see [database.md](database.md) |
-| `FILES_PATH` | `/app/files` | Root directory for managed files. Subdirectories `images/`, `configs/`, and `scripts/` are created automatically on startup and should each be bind-mounted to the host if granular control is needed |
+| `FILES_PATH` | `/app/files` | Root directory for managed files. Subdirectories `images/` and `configs/` are created automatically on startup and should each be bind-mounted to the host if granular control is needed. The ZTP script itself is not managed here — see "Container" above, `drawbridge-bootstrap` |
 | `LOG_LEVEL` | `INFO` | App logger verbosity (`TRACE`/`DEBUG`/`INFO`/`WARNING`/`ERROR`). `TRACE` is a custom level below `DEBUG` — every successful API response logs its message plus the acting username (or `anonymous`) and remote IP; off by default since it fires on routine reads (list devices, list sessions, etc.), not just writes. Forced to `DEBUG` under `app.testing` regardless of this value |
 | `FLASK_DEBUG` | `0` | Set to `1` in local dev only, never in container |
 | `SECRET_KEY` | none — required | Flask session signing key for Flask-Login; must be set explicitly in every environment |
@@ -393,7 +418,6 @@ podman manifest push drawbridge-manifest <registry>/drawbridge:latest
 | `LOG_RETENTION_DAYS` | `30` | Seeds the `log_retention_days` DB setting on first run only; change the live value via `PUT /api/settings/log-retention` instead. Set to `indefinite` for no purging |
 | `DEFAULT_IMAGE` | none | Seeds the `default_image` DB setting on first run if set. Used as the fallback image for newly registered devices that don't specify one. Change the live value via `PUT /api/settings/default-image` |
 | `DEFAULT_CONFIG_FILE` | none | Seeds the `default_config_file` DB setting on first run if set. Used as the fallback config file for newly registered devices that don't specify one. Change the live value via `PUT /api/settings/default-config-file` |
-| `DEFAULT_SCRIPT` | none | Seeds the `default_script` DB setting on first run if set. Used as the fallback ZTP script for newly registered devices that don't specify one. Change the live value via `PUT /api/settings/default-script` |
 | `ADMIN_PASSWORD` | none — random password generated and printed once if unset | Sets the bootstrap admin's initial password on first run only, instead of a random one. Forces a password reset on first login (see [authentication.md](authentication.md), "Bootstrap admin password sources") — prefer `CREDENTIALS_DIRECTORY` below where possible, since this value has to persist in plaintext (a Quadlet unit, a `.env` file) for the container to read it on every restart |
 | `CREDENTIALS_DIRECTORY` | none | Set automatically by systemd when a unit uses `LoadCredential=`/`SetCredential=`; not meant to be set by hand. If a credential named `admin_password` exists in this directory on first run, it seeds the bootstrap admin's password without forcing a reset — see below and [authentication.md](authentication.md) |
 | `TLS_CERT_PATH` | `/app/data/tls/cert.pem` | Path to Drawbridge's TLS certificate. Self-signed and auto-generated here on first run if nothing exists at this path — mount your own cert to use it instead. See "TLS" above |

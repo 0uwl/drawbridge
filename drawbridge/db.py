@@ -63,7 +63,6 @@ def _bootstrap_once(app, engine, session_factory):
             _seed_log_retention(session, app)
             _seed_default_image(session, app)
             _seed_default_config_file(session, app)
-            _seed_default_script(session, app)
             if is_first_run:
                 _bootstrap_admin(session, app)
             session.commit()
@@ -204,12 +203,6 @@ def _seed_default_config_file(session, app):
     value = app.config['DEFAULT_CONFIG_FILE']
     if value is not None and session.get(Setting, 'default_config_file') is None:
         session.add(Setting(key='default_config_file', value=value))
-
-
-def _seed_default_script(session, app):
-    value = app.config['DEFAULT_SCRIPT']
-    if value is not None and session.get(Setting, 'default_script') is None:
-        session.add(Setting(key='default_script', value=value))
 
 
 def _initial_admin_password(app) -> tuple[str, bool, str]:

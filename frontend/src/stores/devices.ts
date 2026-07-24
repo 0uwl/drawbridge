@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import client from '../api/client'
-import type { Device, DeviceCreatePayload } from '../types'
+import type { Device, DeviceCreatePayload, DeviceUpdatePayload } from '../types'
 
 interface DevicesState {
   items: Device[]
@@ -34,6 +34,21 @@ export const useDevicesStore = defineStore('devices', {
       this.error = null
       try {
         await client.post('/devices/', device)
+        await this.list()
+        return true
+      } catch (err) {
+        this.error = (err as Error).message
+        return false
+      } finally {
+        this.loading = false
+      }
+    },
+
+    async update(serial: string, device: DeviceUpdatePayload): Promise<boolean> {
+      this.loading = true
+      this.error = null
+      try {
+        await client.put(`/devices/${serial}`, device)
         await this.list()
         return true
       } catch (err) {
