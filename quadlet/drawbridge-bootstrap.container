@@ -1,8 +1,11 @@
 # Pod member — see quadlet/drawbridge.pod for the pod-level settings
-# shared with drawbridge.container/drawbridge-rsyslog.container
-# (PublishPort=, UserNS=) and for install/host-prep instructions. See
-# docs/decisions.md ("HTTPS cert trust on C9200CX") for why this container
-# exists at all.
+# shared with drawbridge.container/drawbridge-rsyslog.container/
+# drawbridge-nginx.container (PublishPort=, UserNS=) and for install/
+# host-prep instructions. See docs/decisions.md ("HTTPS cert trust on
+# C9200CX") for why this container exists at all, and v0-3-2.md for why
+# it's deliberately kept separate from drawbridge-nginx rather than folded
+# in: ZTP script serving is core, non-optional functionality, unlike
+# nginx/rsyslog which are both meant to be independently skippable.
 
 [Unit]
 Description=Drawbridge ZTP script bootstrap server

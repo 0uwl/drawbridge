@@ -50,8 +50,9 @@ def test_ensure_cert_files_are_valid_pem(tmp_path):
 
 
 def test_ensure_cert_includes_san_for_127_0_0_1_and_localhost(tmp_path):
-    # rsyslog's omhttp (libcurl) hostname-verifies https://127.0.0.1:8080 and
-    # ignores a bare CN — regression coverage for that SAN requirement.
+    # drawbridge-nginx hostname-verifies https://127.0.0.1:8080 for its own
+    # loopback testing and ignores a bare CN — regression coverage for that
+    # SAN requirement (see v0-3-2.md).
     cert_path = tmp_path / 'cert.pem'
     key_path = tmp_path / 'key.pem'
 

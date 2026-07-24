@@ -4,6 +4,7 @@ import secrets
 from pathlib import Path
 
 from flask import Flask, jsonify, send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from drawbridge.auth import init_login_manager, limiter
 from drawbridge.db import init_db
@@ -37,6 +38,22 @@ def create_app(config_dict: dict = {}):
 
     app = Flask(__name__, static_folder=None)
 
+    # drawbridge-nginx proxies every request over loopback (see
+    # gunicorn.conf.py, v0-3-2.md) — without this, request.remote_addr
+    # would be nginx's own address for every single request, not the real
+    # caller's. That's not cosmetic: it's the actual security gate behind
+    # the ZTP session model (drawbridge/api/leases.py pins/checks
+    # provisioning sessions by IP; queries.find_active_session_by_ip()
+    # gates image/config downloads by IP alone) and Flask-Limiter's
+    # per-IP rate limiting (drawbridge/auth.py). x_for=1 trusts exactly
+    # one hop's X-Forwarded-For — safe here because nginx is the only
+    # thing that can ever reach Gunicorn's internal-only port in the
+    # first place. x_proto/x_host fix request.scheme/Host for SAML's
+    # ACS/entity-ID URL construction (drawbridge/saml.py). A no-op when no
+    # X-Forwarded-* header is present at all (TLS_DISABLED mode with no
+    # proxy in front, or tests).
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
     # Configuration (env vars per docs/deployment.md, overridable via config_dict for tests)
     app.config['DATABASE_PATH'] = os.getenv('DATABASE_PATH', DATABASE_PATH)
     app.config['FILES_PATH'] = os.getenv('FILES_PATH', FILES_PATH)
@@ -58,11 +75,13 @@ def create_app(config_dict: dict = {}):
     if app.testing:
         app.config['LOG_LEVEL'] = 'DEBUG'
 
-    # Beta section 3 makes Drawbridge terminate its own TLS by default (see
-    # drawbridge/gunicorn.conf.py), so there's no longer an "unencrypted
+    # Drawbridge terminates its own TLS by default (drawbridge-nginx, see
+    # v0-3-2.md and gunicorn.conf.py), so there's no longer an "unencrypted
     # Drawbridge" deployment mode to gate against — except TLS_DISABLED,
-    # the local-dev escape hatch, where SESSION_COOKIE_SECURE would silently
-    # drop the session cookie over plain HTTP instead.
+    # where SESSION_COOKIE_SECURE would silently drop the session cookie
+    # over plain HTTP instead (local dev, or an operator's own reverse
+    # proxy in front instead of drawbridge-nginx — see docs/deployment.md
+    # "TLS").
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['SESSION_COOKIE_SECURE'] = not app.testing and not app.config['TLS_DISABLED']
 

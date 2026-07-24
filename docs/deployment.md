@@ -59,7 +59,7 @@ part of the deployment, not an optional hardening step layered on later.
 
 ## Container
 
-**Requires Podman 5.0+.** The pod runs as three images, described by four
+**Requires Podman 5.0+.** The pod runs as four images, described by five
 Quadlet unit files (below) — `.pod` Quadlet units, and the `Pod=` key on
 `.container` units, both landed in Podman 5.0. Older Podman fails with
 `unsupported key 'Pod' in group 'Container'`.
@@ -77,10 +77,12 @@ build:
   - Non-root user `drawbridge` (UID 1000) created in image
   - `COPY --from=` pulls the built frontend assets from stage 1 into
     `drawbridge/static/` — Node never ships in the final image
-  - `ENTRYPOINT` runs `gunicorn` directly — no process supervisor. Binds
-    `0.0.0.0:$DRAWBRIDGE_PORT` (default `8080`, via `-c
+  - `ENTRYPOINT` runs `gunicorn` directly — no process supervisor (`-c
     drawbridge/gunicorn.conf.py` — Gunicorn does not discover a config file
-    nested under a subdirectory on its own)
+    nested under a subdirectory on its own). Binds an internal-only
+    `127.0.0.1:8078` by default — `drawbridge-nginx` terminates TLS and
+    proxies to it (see "TLS" below); only under `TLS_DISABLED` does
+    Gunicorn bind `0.0.0.0:$DRAWBRIDGE_PORT` (default `8080`) directly
   - `/app/data` and `/app/files` are mount points — do not COPY content there
   - Root filesystem is read-only at runtime; `/tmp`, `/run`, and
     `/home/drawbridge` are tmpfs — the last of those is for Gunicorn's own
@@ -114,11 +116,26 @@ provisioning is deferred, not rejected" for why that was removed), but
 still editable in place per deployment. Everything the script does after
 that first fetch — phone-home, completion callback, log push, file
 downloads — still goes over HTTPS against the main `drawbridge` container.
+Deliberately its own container rather than folded into `drawbridge-nginx`
+below (which could easily serve a static file too): ZTP script serving is
+core, non-optional functionality, whereas `drawbridge-nginx` is meant to
+be independently skippable — see "TLS" below.
+
+**`Containerfile.nginx`** builds `localhost/drawbridge-nginx:latest` — a
+separate, single-stage Alpine image (`apk add nginx nginx-mod-stream`),
+`ENTRYPOINT` running `nginx -g "daemon off;"` directly, also no
+supervisor. Terminates TLS on **:8080** (replacing Gunicorn's own — see
+"TLS" below) and gives a plain-HTTP request against that same port a
+clean response instead of a connection reset, using nginx's `stream` +
+`ssl_preread` modules to detect the protocol before routing — see
+[decisions.md](decisions.md) ("hardcoded 8080s") for the full design.
+Everything it proxies goes to Gunicorn's internal `127.0.0.1:8078`.
 
 **Quadlet**, at `~/.config/containers/systemd/`, run as whichever user
 invokes it — there's no dedicated `drawbridge` system user:
 - `quadlet/drawbridge.pod` — owns the pod's shared network namespace,
-  `PublishPort=` (`8080`, `8090`, `10514/udp`+`/tcp`, and `10515/tcp`), and
+  `PublishPort=` (`8080` — owned by `drawbridge-nginx`, not Gunicorn, see
+  "TLS" below — `8090`, `10514/udp`+`/tcp`, and `10515/tcp`), and
   `UserNS=keep-id` for member containers' bind mounts.
 - `quadlet/drawbridge.container` — the app, `Pod=drawbridge.pod`; otherwise
   the same `Volume=`/`Environment=`/`ReadOnly=true`/`Tmpfs=` as before the
@@ -132,9 +149,16 @@ invokes it — there's no dedicated `drawbridge` system user:
 - `quadlet/drawbridge-bootstrap.container` — the ZTP script server,
   `Pod=drawbridge.pod`, read-only bind mount of `files/scripts` (seeded by
   `install.sh` — see above), `ReadOnly=true`, `Restart=on-failure`
-  independent of the other two containers.
+  independent of the other containers.
+- `quadlet/drawbridge-nginx.container` — the TLS-terminating reverse
+  proxy, `Pod=drawbridge.pod`, read-only bind mount of `data/tls`,
+  `ReadOnly=true`, `Tmpfs=/tmp` (nginx's pid file and proxy temp buffers —
+  see the file's own comments for why not `/var/lib/nginx`),
+  `Restart=on-failure` — independent of the other containers, and meant
+  to be skippable: an operator bringing their own reverse proxy just
+  doesn't start this one (see "TLS" below).
 
-[install.sh](../install.sh) installs all four there automatically for the
+[install.sh](../install.sh) installs all five there automatically for the
 user running the script (run it as yourself, not as root/via `sudo` — it
 calls `sudo` itself only for the steps that need it); if a unit is already
 present and differs, it prompts to back up the old one before overwriting
@@ -156,16 +180,16 @@ in the installed `drawbridge.container` unit:
 ```bash
 systemctl --user daemon-reload && systemctl --user start drawbridge-pod.service
 ```
-Starting the pod service starts both member containers together.
+Starting the pod service starts all member containers together.
 
 **[uninstall.sh](../uninstall.sh)** reverses everything `install.sh` deploys
 except the packages and the pulled images: stops and removes the pod and
-its containers, deletes the four Quadlet unit files, deletes the `/app/data`
+its containers, deletes the five Quadlet unit files, deletes the `/app/data`
 and `/app/files` host directories (database, TLS cert/key, uploaded
 images/configs), and removes the Kea config under `/etc/kea` that
 `install.sh` wrote there — `podman`, the Kea packages themselves, and
-`ghcr.io/0uwl/drawbridge:latest`/`-rsyslog:latest`/`-bootstrap:latest` in
-local podman storage are all left alone. Those host directories default to
+`ghcr.io/0uwl/drawbridge:latest`/`-rsyslog:latest`/`-bootstrap:latest`/`-nginx:latest`
+in local podman storage are all left alone. Those host directories default to
 `~/.local/share/drawbridge/{data,files}`, but since the `Volume=` lines
 above are editable, `uninstall.sh` reads the *installed*
 `drawbridge.container` unit's actual `Volume=` lines to find the real
@@ -179,38 +203,51 @@ schema, cert, or config lingers into the fresh install.
 
 ## TLS
 
-Drawbridge terminates its own TLS by default — GUI and most device-facing
-traffic (ZTP phone-home, provision-complete, file downloads) go through the
-same HTTPS listener. The one exception is the very first fetch, the ZTP
-script itself: DHCP Option 67's `boot-file-name` fetch happens before any
-script code has run, so there's no way to pre-establish cert trust ahead of
-it — that one fetch goes to the separate, deliberately plain-HTTP
-`drawbridge-bootstrap` container on `:8090` instead (see "Container" above
-and [decisions.md](decisions.md), "HTTPS cert trust on C9200CX"). On first
+Drawbridge terminates its own TLS by default, via `drawbridge-nginx`, not
+Gunicorn directly (see "Container" above) — GUI and most device-facing
+traffic (ZTP phone-home, provision-complete, file downloads) go through
+nginx's HTTPS listener on `:8080`, which proxies to Gunicorn's
+internal-only `127.0.0.1:8078`. Gunicorn used to wrap its own socket in
+TLS; that meant a plain HTTP request against `:8080` got nothing but a
+connection reset, with no way to redirect on a socket already committed to
+a TLS handshake. nginx's `stream`+`ssl_preread` modules fix this properly:
+a plain-HTTP request against `:8080` now gets a clean response telling the
+client to use `https://` instead (see [decisions.md](decisions.md),
+"hardcoded 8080s").
+
+The one exception is the very first fetch, the ZTP script itself: DHCP
+Option 67's `boot-file-name` fetch happens before any script code has run,
+so there's no way to pre-establish cert trust ahead of it — that one
+fetch goes to the separate, deliberately plain-HTTP `drawbridge-bootstrap`
+container on `:8090` instead (see "Container" above and
+[decisions.md](decisions.md), "HTTPS cert trust on C9200CX"). On first
 run, if `TLS_CERT_PATH`/`TLS_KEY_PATH` don't already exist,
-`drawbridge/tls.py` generates a self-signed cert/key pair there; an operator
+`drawbridge/tls.py` (still run from the `drawbridge` container, at
+Gunicorn startup) generates a self-signed cert/key pair there; an operator
 who mounts their own cert/key pair at those paths instead (e.g. a real
 ACME-issued cert, or a shared org CA) has it used as-is — nothing is
-overwritten if the files are already present.
+overwritten if the files are already present. `drawbridge-nginx` reads
+this same path read-only (`quadlet/drawbridge-nginx.container`) to do the
+actual termination.
 
-The generated cert includes a SAN (`127.0.0.1` + `localhost`), needed so the
-`drawbridge-rsyslog` container's `omhttp` action passes libcurl's hostname
-check when it connects to `https://127.0.0.1:8080` inside the pod's shared
-network namespace — a bare-CN cert fails that check even when otherwise
-trusted. (CA-chain validation itself is intentionally skipped for this one
-connection — see [logging.md](logging.md) — but hostname verification
-stays on.) **Upgrading from a pre-pod install:** delete
+The generated cert includes a SAN (`127.0.0.1` + `localhost`), needed for
+`drawbridge-nginx`'s own hostname-verification testing against
+`https://127.0.0.1:8080` — a bare-CN cert fails that check even when
+otherwise trusted. **Upgrading from a pre-pod install:** delete
 `data/tls/cert.pem` and `data/tls/key.pem` so `ensure_cert()` regenerates
 them with the SAN on next start; an existing no-SAN cert is not replaced
 automatically.
 
-An operator who wants a "real" ACME-issued cert for browser convenience may
-put their own reverse proxy in front of the GUI path only, re-terminating/
-re-encrypting to Drawbridge's own listener. ZTP devices always talk directly
-to Drawbridge's own listener (self-signed or org-mounted cert) — never
-through that optional proxy: Option 67's boot-file URL points at Drawbridge
-directly, and isolated provisioning VLANs generally can't complete ACME
-challenges anyway.
+An operator who wants a "real" ACME-issued cert, a WAF, or some other
+reverse proxy in front instead of `drawbridge-nginx` can either (a) mount
+that cert/key pair at `TLS_CERT_PATH`/`TLS_KEY_PATH` — `drawbridge-nginx`
+uses it as-is, no other change needed — or (b) set `TLS_DISABLED=1` and
+`systemctl --user disable --now drawbridge-nginx.service`, so Gunicorn
+binds `DRAWBRIDGE_PORT` directly in plain HTTP and their own proxy
+terminates TLS in front of it instead. ZTP devices always talk to
+whichever listener is actually reachable on `DRAWBRIDGE_PORT` — Option
+67's boot-file URL is unaffected either way, since it points at
+`drawbridge-bootstrap` on a different port entirely.
 
 **Device-side cert trust needs a matching CA cert mounted/embedded on the
 device side too**, since a self-signed server cert isn't trusted by anything
@@ -220,12 +257,14 @@ Drawbridge's actual cert (or its issuing CA) before the script is used
 against real hardware — see [decisions.md](decisions.md) for how this gets
 consumed on each platform branch.
 
-**Local development:** set `TLS_DISABLED=1` to skip TLS entirely and run
-Gunicorn as plain HTTP — a dev convenience so a local `flask run`/`dev.sh`
-session doesn't need a trusted cert. This also relaxes
-`SESSION_COOKIE_SECURE` so login still works over plain HTTP. **Never set
-this in a deployed/Quadlet config** — the deployed container always
-terminates TLS.
+**`TLS_DISABLED`** skips TLS entirely and makes Gunicorn bind
+`DRAWBRIDGE_PORT` directly, in plain HTTP — either for local development
+(`flask run`/`dev.sh`, no trusted cert needed) or as the supported
+bring-your-own-reverse-proxy production mode described above. Either way
+it also relaxes `SESSION_COOKIE_SECURE` so login still works over plain
+HTTP. If you set it for the bring-your-own-proxy case specifically, also
+disable `drawbridge-nginx` (see above) — otherwise it stays running with
+nothing to terminate TLS for.
 
 ## Device Syslog Collection
 
@@ -412,7 +451,7 @@ podman manifest push drawbridge-manifest <registry>/drawbridge:latest
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DRAWBRIDGE_PORT` | `8080` | Port Gunicorn binds to (`drawbridge/gunicorn.conf.py`) in production, and the port `flask run --port` / `dev.sh` use in local dev. `frontend/vite.config.js`'s dev-server proxy reads the same variable so it targets the right backend port automatically. **Not** read by `kea/kea-dhcp4.conf`'s Option 67 URL or `scripts/ztp-base.py`'s own `DRAWBRIDGE_PORT` constant — those are static/device-side and must be updated by hand if this changes from its default (see [decisions.md](decisions.md)) |
+| `DRAWBRIDGE_PORT` | `8080` | The port this deployment is reached on. Only directly controls Gunicorn's own bind when `TLS_DISABLED` is set (see "TLS" above); otherwise Gunicorn always binds a fixed internal-only port and this is just the value `drawbridge-nginx`'s conf and `drawbridge.pod`'s `PublishPort=` need to agree on by hand if changed. Also the port `flask run --port`/`dev.sh` use in local dev — `frontend/vite.config.js`'s dev-server proxy reads the same variable so it targets the right backend port automatically. **Not** read by `kea/kea-dhcp4.conf`'s Option 67 URL or `scripts/ztp-base.py`'s own `DRAWBRIDGE_PORT` constant — those are static/device-side and must be updated by hand if this changes from its default (see [decisions.md](decisions.md)) |
 | `DATABASE_PATH` | `/app/data/drawbridge.db` | SQLite database file path, or a full SQLAlchemy URL (e.g. `postgresql+psycopg://user:pass@host/dbname`) to use PostgreSQL instead — see [database.md](database.md) |
 | `WORKERS` | `4` | Number of Gunicorn worker processes. Ignored (forced to `1`) when `DATABASE_PATH` resolves to SQLite — see [database.md](database.md) |
 | `FILES_PATH` | `/app/files` | Root directory for managed files. Subdirectories `images/` and `configs/` are created automatically on startup and should each be bind-mounted to the host if granular control is needed. The ZTP script itself is not managed here — see "Container" above, `drawbridge-bootstrap` |
@@ -427,7 +466,7 @@ podman manifest push drawbridge-manifest <registry>/drawbridge:latest
 | `CREDENTIALS_DIRECTORY` | none | Set automatically by systemd when a unit uses `LoadCredential=`/`SetCredential=`; not meant to be set by hand. If a credential named `admin_password` exists in this directory on first run, it seeds the bootstrap admin's password without forcing a reset — see below and [authentication.md](authentication.md) |
 | `TLS_CERT_PATH` | `/app/data/tls/cert.pem` | Path to Drawbridge's TLS certificate. Self-signed and auto-generated here on first run if nothing exists at this path — mount your own cert to use it instead. See "TLS" above |
 | `TLS_KEY_PATH` | `/app/data/tls/key.pem` | Path to Drawbridge's TLS private key. Same first-run-generation behavior as `TLS_CERT_PATH` |
-| `TLS_DISABLED` | unset (TLS on) | **Local development only** — set to `1` to skip TLS and run plain HTTP. Never set in a deployed/Quadlet config. See "TLS" above |
+| `TLS_DISABLED` | unset (TLS on) | Set to `1` to skip TLS and run plain HTTP on `DRAWBRIDGE_PORT` directly — either local development, or a supported production mode for an operator bringing their own reverse proxy instead of `drawbridge-nginx` (also disable that unit in that case). See "TLS" above |
 | `SAML_SETTINGS_PATH` | `/app/data/saml` | Directory containing python3-saml's `settings.json`. SAML routes are disabled (404) unless a `settings.json` exists there — see "SAML SSO" above |
 
 ### Systemd credentials for the bootstrap admin password

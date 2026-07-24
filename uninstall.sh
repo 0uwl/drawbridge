@@ -3,7 +3,7 @@
 # and its containers, deletes the Quadlet unit files, deletes the data
 # directory (SQLite DB, TLS cert/key, uploaded images/configs), and
 # removes the Kea configuration install.sh deployed. Leaves podman, Kea's
-# packages, and the three pulled container images alone — re-running
+# packages, and the four pulled container images alone — re-running
 # install.sh afterwards is a genuinely fresh install with nothing carried
 # over from whatever version was here before. Meant to be run before every
 # reinstall when testing a new version, not just once.
@@ -50,7 +50,7 @@ fi
 
 quadlet_dir="$HOME/.config/containers/systemd"
 quadlet_container_file="$quadlet_dir/drawbridge.container"
-QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container drawbridge-bootstrap.container)
+QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container drawbridge-bootstrap.container drawbridge-nginx.container)
 KEA_CONF_FILES=(/etc/kea/kea-dhcp4.conf /etc/kea/kea-ctrl-agent.conf /etc/kea/kea-api-password /etc/rsyslog.d/49-drawbridge-kea.conf)
 
 # Volume=%h/.local/share/drawbridge/data:/app/data:Z is editable - an
@@ -128,7 +128,7 @@ if [ "$kea_config_found" -eq 1 ]; then
 fi
 echo "Left alone: podman, the Kea packages, and the pulled"
 echo "ghcr.io/0uwl/drawbridge:latest / ghcr.io/0uwl/drawbridge-rsyslog:latest /"
-echo "ghcr.io/0uwl/drawbridge-bootstrap:latest images."
+echo "ghcr.io/0uwl/drawbridge-bootstrap:latest / ghcr.io/0uwl/drawbridge-nginx:latest images."
 echo "Backup files (*.bak.*) from previous installs/upgrades are left alone too -"
 echo "remove those by hand if you don't want them."
 echo
@@ -151,13 +151,13 @@ echo "==> Stopping and removing the Drawbridge pod"
 # Quadlet files are gone, so disabling here is about a clean stop this
 # session, not something that needs to survive that reload.
 systemctl --user disable --now drawbridge-pod.service >/dev/null 2>&1 || true
-systemctl --user reset-failed drawbridge-pod.service drawbridge.service drawbridge-rsyslog.service drawbridge-bootstrap.service >/dev/null 2>&1 || true
+systemctl --user reset-failed drawbridge-pod.service drawbridge.service drawbridge-rsyslog.service drawbridge-bootstrap.service drawbridge-nginx.service >/dev/null 2>&1 || true
 # Belt-and-suspenders: clean up by name too, in case the pod was ever
 # started by hand (podman pod create/run) instead of via the unit above.
 # Only ever removes the pod/containers, never an image - no -i/--rmi flag
 # anywhere in this script.
 podman pod rm -f drawbridge >/dev/null 2>&1 || true
-podman rm -f drawbridge drawbridge-rsyslog drawbridge-bootstrap >/dev/null 2>&1 || true
+podman rm -f drawbridge drawbridge-rsyslog drawbridge-bootstrap drawbridge-nginx >/dev/null 2>&1 || true
 
 echo "==> Removing Quadlet unit files"
 for f in "${QUADLET_FILES[@]}"; do

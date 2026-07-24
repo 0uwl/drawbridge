@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Installs podman and Kea on an Ubuntu/Debian provisioning host (amd64 or
 # arm64, e.g. Raspberry Pi OS) if not already present, installs Drawbridge's
-# kea/*.conf into /etc/kea, installs the four Quadlet unit files (the pod
-# plus its three member containers) for the invoking user, and pulls the
-# three published container images. Does not start the Drawbridge pod itself —
+# kea/*.conf into /etc/kea, installs the five Quadlet unit files (the pod
+# plus its four member containers) for the invoking user, and pulls the
+# four published container images. Does not start the Drawbridge pod itself —
 # SECRET_KEY and the host data directories still need setting up by hand;
 # see the "Done" message this script prints and docs/deployment.md.
 #
@@ -52,11 +52,12 @@ fi
 IMAGE="ghcr.io/0uwl/drawbridge:$IMAGE_TAG"
 RSYSLOG_IMAGE="ghcr.io/0uwl/drawbridge-rsyslog:$IMAGE_TAG"
 BOOTSTRAP_IMAGE="ghcr.io/0uwl/drawbridge-bootstrap:$IMAGE_TAG"
+NGINX_IMAGE="ghcr.io/0uwl/drawbridge-nginx:$IMAGE_TAG"
 # Pod unit first: drawbridge.container's Pod= reference means Quadlet needs
 # it present at daemon-reload time, though install order here doesn't
-# actually matter (all four land before the daemon-reload this script
+# actually matter (all five land before the daemon-reload this script
 # tells the operator to run at the end).
-QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container drawbridge-bootstrap.container)
+QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container drawbridge-bootstrap.container drawbridge-nginx.container)
 KEA_DHCP4_SERVICE="kea-dhcp4-server"
 KEA_CTRL_AGENT_SERVICE="kea-ctrl-agent"
 
@@ -274,7 +275,7 @@ echo "==> Enabling and restarting Kea services"
 sudo systemctl enable --now "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
 sudo systemctl restart "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
 
-echo "==> Pulling $IMAGE, $RSYSLOG_IMAGE, and $BOOTSTRAP_IMAGE"
+echo "==> Pulling $IMAGE, $RSYSLOG_IMAGE, $BOOTSTRAP_IMAGE, and $NGINX_IMAGE"
 # Deliberately not sudo'd - the Quadlet units below run as rootless
 # containers under your own systemd --user instance (see
 # docs/deployment.md), reading from your own rootless podman storage
@@ -285,6 +286,7 @@ echo "==> Pulling $IMAGE, $RSYSLOG_IMAGE, and $BOOTSTRAP_IMAGE"
 podman pull "$IMAGE"
 podman pull "$RSYSLOG_IMAGE"
 podman pull "$BOOTSTRAP_IMAGE"
+podman pull "$NGINX_IMAGE"
 
 # The Quadlet units run as rootless containers under your own systemd
 # --user instance (see docs/deployment.md), installed into your own $HOME.
