@@ -222,6 +222,20 @@ if [ -n "$interface" ] && ! ip link show "$interface" >/dev/null 2>&1; then
     sed -i "s/\"interfaces\": \[\"$interface\"\]/\"interfaces\": [\"$resolved_interface\"]/" "$kea_conf_dir/kea-dhcp4.conf"
 fi
 
+# Best-effort: whichever interface Kea ends up listening on (resolved
+# above, or the original placeholder if it was already valid on this host)
+# is also the one devices reach Drawbridge through - used below to seed
+# scripts/ztp-base.py's DRAWBRIDGE_HOST automatically instead of leaving
+# its placeholder value for every install. Empty if detection above never
+# ran and the placeholder itself was unresolvable, or the interface simply
+# has no IPv4 address yet (e.g. still DHCP-pending) - either way, nothing
+# here to fail on, ztp-base.py just keeps its placeholder for manual editing.
+final_kea_interface="${resolved_interface:-$interface}"
+device_facing_ip=""
+if [ -n "$final_kea_interface" ]; then
+    device_facing_ip=$(ip -4 -o addr show dev "$final_kea_interface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+fi
+
 echo "==> Installing Kea configuration"
 sudo install -d -m 755 /etc/kea
 for conf in kea-dhcp4.conf kea-ctrl-agent.conf; do
@@ -325,23 +339,41 @@ for f in "${QUADLET_FILES[@]}"; do
     fi
 done
 
+# drawbridge.container's data directory (SQLite DB, TLS cert/key - see
+# docs/deployment.md "Container") - created here rather than asking the
+# operator to mkdir it by hand first. Safe to relocate afterward: this is
+# just the documented default location, and the installed Quadlet units'
+# Volume= lines are editable like any other setting.
+mkdir -p "$HOME/.local/share/drawbridge/data"
+
 # drawbridge-bootstrap.container bind-mounts this directory read-only (see
 # Containerfile.bootstrap) - created and seeded here, before the pod is
 # ever started, so there's no race between it and drawbridge.container over
 # who creates it first (which would otherwise leave it root-owned under
 # UserNS=keep-id). Only copied if missing, same "never clobber an
 # operator's edits" posture as the Quadlet units above - re-running
-# install.sh must not overwrite a already-customized ztp-base.py.
+# install.sh must not overwrite a already-customized ztp-base.py. This also
+# establishes .../files/ itself, so no separate mkdir is needed for it.
 ztp_script_dir="$HOME/.local/share/drawbridge/files/scripts"
 mkdir -p "$ztp_script_dir"
 if [ ! -f "$ztp_script_dir/ztp-base.py" ]; then
     echo "==> Seeding $ztp_script_dir/ztp-base.py"
     install -m 644 "$ztp_script_src" "$ztp_script_dir/ztp-base.py"
+    if [ -n "$device_facing_ip" ]; then
+        echo "==> Setting DRAWBRIDGE_HOST to $device_facing_ip (detected on $final_kea_interface) in $ztp_script_dir/ztp-base.py"
+        sed -i "s/^DRAWBRIDGE_HOST = '[^']*'/DRAWBRIDGE_HOST = '$device_facing_ip'/" "$ztp_script_dir/ztp-base.py"
+    else
+        echo "==> Could not detect an IPv4 address on '$final_kea_interface' - DRAWBRIDGE_HOST in $ztp_script_dir/ztp-base.py still needs manual editing"
+    fi
 fi
 
 echo "==> Done. Before starting the pod:"
 echo "      - edit SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) in $quadlet_dir/drawbridge.container"
-echo "      - edit DRAWBRIDGE_HOST and DRAWBRIDGE_CA_CERT_PEM in $ztp_script_dir/ztp-base.py for this deployment"
-echo "      - mkdir -p $HOME/.local/share/drawbridge/{data,files}"
+# DRAWBRIDGE_HOST is seeded automatically above when detection succeeds;
+# DRAWBRIDGE_CA_CERT_PEM gets patched in automatically by the drawbridge
+# container itself once it starts and generates its cert (drawbridge/tls.py,
+# see "TLS" in docs/deployment.md) - nothing to do here for either, unless
+# detection above failed (no IPv4 address on the interface yet), in which
+# case DRAWBRIDGE_HOST still needs a manual edit.
 echo "      - systemctl --user daemon-reload && systemctl --user start drawbridge-pod.service"
 echo "    See docs/deployment.md for details."

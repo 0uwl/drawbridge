@@ -24,15 +24,24 @@ import urllib.request
 # the default. See docs/decisions.md.
 DRAWBRIDGE_HOST = '192.168.100.1'
 DRAWBRIDGE_PORT = 8080
+DRAWBRIDGE_BASE_URL= f'https://{DRAWBRIDGE_HOST}:{DRAWBRIDGE_PORT}/api/v1'
 
-# Hand-maintained, same posture as DRAWBRIDGE_HOST above — must be set to
-# this deployment's actual Drawbridge TLS cert (or its issuing CA) before
-# this script is used against a device with `cli` present. A self-signed
-# cert is a valid trust anchor on its own; no real CA hierarchy required.
-# Used two ways: fed to `crypto pki authenticate` on C9200CX (no network
-# stack of its own, see below), and as ssl's `cadata` on other real
-# platforms (which do have their own network stack).
+# Must be set to this deployment's actual Drawbridge TLS cert (or its
+# issuing CA) before this script is used against a device with `cli`
+# present. A self-signed cert is a valid trust anchor on its own; no real
+# CA hierarchy required. Used two ways: fed to `crypto pki authenticate` on
+# C9200CX (no network stack of its own, see below), and as ssl's `cadata`
+# on other real platforms (which do have their own network stack).
+#
+# Auto-synced by drawbridge/tls.py after every Drawbridge restart (see
+# docs/deployment.md, "TLS") to match whatever cert Drawbridge is actually
+# serving — the BEGIN/END markers below mark exactly what gets rewritten;
+# nothing else in this file is touched. Remove the markers if you'd rather
+# manage this by hand instead (e.g. pointing at an org CA rather than the
+# served leaf cert) — Drawbridge skips files missing them.
+# --- DRAWBRIDGE_CA_CERT_PEM:BEGIN ---
 DRAWBRIDGE_CA_CERT_PEM = None
+# --- DRAWBRIDGE_CA_CERT_PEM:END ---
 
 C9200CX_PLATFORM = 'C9200CX'
 TRUSTPOINT_NAME = 'DRAWBRIDGE-CA'
@@ -42,6 +51,8 @@ STATUS_FILENAME = 'status.json'
 PROVISION_REQUEST_FILENAME = 'provision-request.json'
 PROVISION_REQUEST_FLASH_PATH = 'flash:' + PROVISION_REQUEST_FILENAME
 PROVISION_REQUEST_LOCAL_PATH = '/bootflash/' + PROVISION_REQUEST_FILENAME
+
+PLATFORM = None
 
 
 def get_serial():
@@ -89,11 +100,11 @@ def _ensure_c9200cx_trustpoint(cli):
     cert is harmless. Must run before any `copy https://` call on this
     platform.
     """
-    cli.execute('crypto pki trustpoint {0}'.format(TRUSTPOINT_NAME))
+    cli.execute(f'crypto pki trustpoint {TRUSTPOINT_NAME}')
     cli.execute('enrollment terminal')
     cli.execute('revocation-check none')
     cli.execute('exit')
-    cli.execute('crypto pki authenticate {0}'.format(TRUSTPOINT_NAME))
+    cli.execute(f'crypto pki authenticate {TRUSTPOINT_NAME}')
     cli.execute(DRAWBRIDGE_CA_CERT_PEM)
     cli.execute('quit')
     cli.execute('yes')
@@ -120,8 +131,7 @@ def request_provisioning(serial, platform):
     only a URL and a destination file. Returns the parsed decision dict, or
     None if denied/unreachable.
     """
-    url = 'https://{0}:{1}/api/v1/provision-request?serial={2}'.format(
-        DRAWBRIDGE_HOST, DRAWBRIDGE_PORT, urllib.parse.quote(serial))
+    url = f'{DRAWBRIDGE_BASE_URL}/provision-request?serial={urllib.parse.quote(serial)}'
 
     try:
         import cli
@@ -133,7 +143,7 @@ def request_provisioning(serial, platform):
         # direct socket calls fail. Fetch via IOS XE's own 'copy' primitive
         # instead (see docs/decisions.md "C9200CX network stack isolation").
         _ensure_c9200cx_trustpoint(cli)
-        cli.execute('copy {0} {1}'.format(url, PROVISION_REQUEST_FLASH_PATH))
+        cli.execute(f'copy {url} {PROVISION_REQUEST_FLASH_PATH}')
         # ponytail: copy's behavior on a non-2xx response (e.g. a 404 denial)
         # is unverified without real hardware — treat a missing/unreadable
         # local file the same as a denial (fail closed either way). Revisit
@@ -191,7 +201,7 @@ def _put_json(url, payload, platform, filename):
         with open('/bootflash/' + filename, 'w') as f:
             json.dump(payload, f)
         # IOS XE's 'copy' to an HTTP(S) destination issues a PUT (see decisions.md).
-        cli.execute('copy flash:{0} {1}'.format(filename, url))
+        cli.execute(f'copy flash:{filename} {url}')
         return
 
     if cli is not None:
@@ -206,14 +216,14 @@ def _put_json(url, payload, platform, filename):
 
 def report_status(payload, platform):
     """Reports completion to Drawbridge."""
-    url = 'https://{0}:{1}/api/v1/provision-complete'.format(DRAWBRIDGE_HOST, DRAWBRIDGE_PORT)
+    url = f'{DRAWBRIDGE_BASE_URL}/provision-complete'
     _put_json(url, payload, platform, STATUS_FILENAME)
 
 
 def log_to_server(serial, message, platform):
     """Reports one log line to Drawbridge's device-log feed (see
     docs/logging.md) — best-effort, same transport as report_status."""
-    url = 'https://{0}:{1}/api/v1/device-logs'.format(DRAWBRIDGE_HOST, DRAWBRIDGE_PORT)
+    url = f'{DRAWBRIDGE_BASE_URL}/device-logs'
     _put_json(url, {'serial': serial, 'message': message}, platform, 'devicelog.json')
 
 
@@ -223,6 +233,7 @@ def main():
         return
 
     platform = get_platform()
+
     log_to_server(serial, 'provisioning started', platform)
 
     decision = request_provisioning(serial, platform)
