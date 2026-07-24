@@ -8,7 +8,7 @@ from drawbridge.db import get_session
 from drawbridge.models import ProvisioningSession, ZTPFile
 
 BASE = '/files'
-ROUTE_TYPE = {'images': 'image', 'configs': 'config', 'scripts': 'script'}
+ROUTE_TYPE = {'images': 'image', 'configs': 'config'}
 
 
 def upload(client, route, filename, content=b'test content', sha256=None):
@@ -37,13 +37,13 @@ def active_session(app):
 
 # --- GET /files/<type> — list ---
 
-@pytest.mark.parametrize('route', ['images', 'configs', 'scripts'])
+@pytest.mark.parametrize('route', ['images', 'configs'])
 def test_list_returns_401_when_not_logged_in(client, route):
     response = client.get(f'{BASE}/{route}')
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize('route', ['images', 'configs', 'scripts'])
+@pytest.mark.parametrize('route', ['images', 'configs'])
 def test_list_returns_empty_list_when_no_files(logged_in_client, route):
     response = logged_in_client.get(f'{BASE}/{route}')
     assert response.status_code == 200
@@ -59,10 +59,9 @@ def test_list_images_returns_uploaded_images(logged_in_client):
     assert {f['filename'] for f in payload} == {'ios-xe-17.9.bin', 'ios-xe-17.12.bin'}
 
 
-def test_list_images_does_not_include_configs_or_scripts(logged_in_client):
+def test_list_images_does_not_include_configs(logged_in_client):
     upload(logged_in_client, 'images', 'firmware.bin')
     upload(logged_in_client, 'configs', 'spine.cfg')
-    upload(logged_in_client, 'scripts', 'ztp.py')
     response = logged_in_client.get(f'{BASE}/images')
     payload = response.get_json()['payload']
     assert len(payload) == 1
@@ -71,13 +70,13 @@ def test_list_images_does_not_include_configs_or_scripts(logged_in_client):
 
 # --- POST /files/<type> — upload ---
 
-@pytest.mark.parametrize('route', ['images', 'configs', 'scripts'])
+@pytest.mark.parametrize('route', ['images', 'configs'])
 def test_upload_returns_401_when_not_logged_in(client, route):
     response = upload(client, route, 'file.bin')
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize('route', ['images', 'configs', 'scripts'])
+@pytest.mark.parametrize('route', ['images', 'configs'])
 def test_upload_returns_422_when_no_file_in_request(logged_in_client, route):
     response = logged_in_client.post(
         f'{BASE}/{route}',
@@ -91,7 +90,6 @@ def test_upload_returns_422_when_no_file_in_request(logged_in_client, route):
 @pytest.mark.parametrize('route,filename', [
     ('images',  'firmware.bin'),
     ('configs', 'spine.cfg'),
-    ('scripts', 'ztp.py'),
 ])
 def test_upload_returns_201_for_valid_file(logged_in_client, route, filename):
     response = upload(logged_in_client, route, filename)
@@ -99,9 +97,8 @@ def test_upload_returns_201_for_valid_file(logged_in_client, route, filename):
 
 
 @pytest.mark.parametrize('route,filename', [
-    ('images',  'firmware.py'),   # script extension rejected by image endpoint
+    ('images',  'firmware.cfg'),  # config extension rejected by image endpoint
     ('configs', 'config.bin'),    # image extension rejected by config endpoint
-    ('scripts', 'script.cfg'),    # config extension rejected by script endpoint
 ])
 def test_upload_returns_422_for_wrong_extension(logged_in_client, route, filename):
     response = upload(logged_in_client, route, filename)
@@ -140,18 +137,6 @@ def test_upload_config_persists_db_record(app, logged_in_client):
         assert f.sha256 == hashlib.sha256(content).hexdigest()
 
 
-def test_upload_script_persists_db_record(app, logged_in_client):
-    content = b'import cli\ncli.execute("show version")'
-    upload(logged_in_client, 'scripts', 'ztp.py', content)
-    with app.app_context():
-        f = get_session().get(ZTPFile, ('script', 'ztp.py'))
-        assert f is not None
-        assert f.file_type == 'script'
-        assert f.filename == 'ztp.py'
-        assert f.size_bytes == len(content)
-        assert f.sha256 == hashlib.sha256(content).hexdigest()
-
-
 def test_upload_image_writes_to_images_subdir(app, logged_in_client):
     upload(logged_in_client, 'images', 'firmware.bin')
     assert os.path.isfile(os.path.join(app.config['FILES_PATH'], 'images', 'firmware.bin'))
@@ -160,11 +145,6 @@ def test_upload_image_writes_to_images_subdir(app, logged_in_client):
 def test_upload_config_writes_to_configs_subdir(app, logged_in_client):
     upload(logged_in_client, 'configs', 'spine.cfg')
     assert os.path.isfile(os.path.join(app.config['FILES_PATH'], 'configs', 'spine.cfg'))
-
-
-def test_upload_script_writes_to_scripts_subdir(app, logged_in_client):
-    upload(logged_in_client, 'scripts', 'ztp.py')
-    assert os.path.isfile(os.path.join(app.config['FILES_PATH'], 'scripts', 'ztp.py'))
 
 
 def test_upload_records_uploaded_by(app, logged_in_client, user):
@@ -185,7 +165,6 @@ def test_upload_image_does_not_appear_in_config_listing(logged_in_client):
 @pytest.mark.parametrize('route,filename', [
     ('images',  'firmware.bin'),
     ('configs', 'spine.cfg'),
-    ('scripts', 'ztp.py'),
 ])
 def test_upload_with_correct_sha256_succeeds(app, logged_in_client, route, filename):
     content = b'test content'
@@ -201,7 +180,6 @@ def test_upload_with_correct_sha256_succeeds(app, logged_in_client, route, filen
 @pytest.mark.parametrize('route,filename', [
     ('images',  'firmware.bin'),
     ('configs', 'spine.cfg'),
-    ('scripts', 'ztp.py'),
 ])
 def test_upload_with_wrong_sha256_returns_422(app, logged_in_client, route, filename):
     content = b'test content'
@@ -217,7 +195,6 @@ def test_upload_with_wrong_sha256_returns_422(app, logged_in_client, route, file
 @pytest.mark.parametrize('route,filename', [
     ('images',  'firmware.bin'),
     ('configs', 'spine.cfg'),
-    ('scripts', 'ztp.py'),
 ])
 def test_upload_with_malformed_sha256_returns_422(logged_in_client, route, filename):
     response = upload(logged_in_client, route, filename, sha256='not-a-hash')
@@ -243,17 +220,6 @@ def test_serve_config_is_accessible_with_active_session(app, client, logged_in_c
     assert response.data == content
 
 
-def test_serve_script_is_accessible_without_auth_or_session(app, client, logged_in_client):
-    """No active_session fixture used here — this is the proof scripts stay
-    ungated (they're fetched via DHCP Option 67 before any serial is known,
-    see beta.md §7)."""
-    content = b'import cli\ncli.execute("show version")'
-    upload(logged_in_client, 'scripts', 'ztp.py', content)
-    response = client.get(f'{BASE}/scripts/ztp.py')
-    assert response.status_code == 200
-    assert response.data == content
-
-
 @pytest.mark.parametrize('route,filename', [
     ('images',  'firmware.bin'),
     ('configs', 'spine.cfg'),
@@ -263,12 +229,6 @@ def test_serve_returns_403_without_active_session(client, logged_in_client, rout
     response = client.get(f'{BASE}/{route}/{filename}')
     assert response.status_code == 403
     assert response.get_json()['error'] == 'no_active_session'
-
-
-def test_serve_returns_404_for_missing_script(client):
-    response = client.get(f'{BASE}/scripts/nonexistent.py')
-    assert response.status_code == 404
-    assert response.get_json()['error'] == 'file_not_found'
 
 
 @pytest.mark.parametrize('route,filename', [
@@ -281,7 +241,7 @@ def test_serve_returns_404_for_missing_file_with_active_session(client, active_s
     assert response.get_json()['error'] == 'file_not_found'
 
 
-@pytest.mark.parametrize('route', ['images', 'configs', 'scripts'])
+@pytest.mark.parametrize('route', ['images', 'configs'])
 @pytest.mark.parametrize('escaped_path', [
     '../../main.py',
     '..%2f..%2fmain.py',
@@ -306,7 +266,6 @@ def test_serve_rejects_path_traversal_attempts(client, active_session, route, es
 @pytest.mark.parametrize('route,filename', [
     ('images',  'firmware.bin'),
     ('configs', 'spine.cfg'),
-    ('scripts', 'ztp.py'),
 ])
 def test_delete_returns_401_when_not_logged_in(client, route, filename):
     response = client.delete(f'{BASE}/{route}/{filename}')
@@ -347,7 +306,7 @@ def test_deleted_file_is_no_longer_served(client, logged_in_client, active_sessi
 
 
 def test_delete_only_removes_file_of_matching_type(app, logged_in_client):
-    """Deleting a config must not touch the images or scripts subdirectories."""
+    """Deleting a config must not touch the images subdirectory."""
     upload(logged_in_client, 'images', 'firmware.bin')
     upload(logged_in_client, 'configs', 'spine.cfg')
     logged_in_client.delete(f'{BASE}/configs/spine.cfg')
@@ -361,7 +320,6 @@ VALID_HASH = 'a' * 64
 @pytest.mark.parametrize('route,filename', [
     ('images',  'firmware.bin'),
     ('configs', 'spine.cfg'),
-    ('scripts', 'ztp.py'),
 ])
 def test_put_hash_returns_401_when_not_logged_in(client, route, filename):
     response = client.put(f'{BASE}/{route}/{filename}', json={'sha256': VALID_HASH})
@@ -384,7 +342,6 @@ def test_put_hash_returns_422_for_malformed_hash(logged_in_client):
 @pytest.mark.parametrize('route,filename', [
     ('images',  'firmware.bin'),
     ('configs', 'spine.cfg'),
-    ('scripts', 'ztp.py'),
 ])
 def test_put_hash_updates_db_record(app, logged_in_client, route, filename):
     upload(logged_in_client, route, filename)

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Installs podman and Kea on an Ubuntu/Debian provisioning host (amd64 or
 # arm64, e.g. Raspberry Pi OS) if not already present, installs Drawbridge's
-# kea/*.conf into /etc/kea, installs the three Quadlet unit files (the pod
-# plus its two member containers) for the invoking user, and pulls the two
-# published container images. Does not start the Drawbridge pod itself —
+# kea/*.conf into /etc/kea, installs the four Quadlet unit files (the pod
+# plus its three member containers) for the invoking user, and pulls the
+# three published container images. Does not start the Drawbridge pod itself —
 # SECRET_KEY and the host data directories still need setting up by hand;
 # see the "Done" message this script prints and docs/deployment.md.
 #
@@ -51,11 +51,12 @@ else
 fi
 IMAGE="ghcr.io/0uwl/drawbridge:$IMAGE_TAG"
 RSYSLOG_IMAGE="ghcr.io/0uwl/drawbridge-rsyslog:$IMAGE_TAG"
+BOOTSTRAP_IMAGE="ghcr.io/0uwl/drawbridge-bootstrap:$IMAGE_TAG"
 # Pod unit first: drawbridge.container's Pod= reference means Quadlet needs
 # it present at daemon-reload time, though install order here doesn't
-# actually matter (all three land before the daemon-reload this script
+# actually matter (all four land before the daemon-reload this script
 # tells the operator to run at the end).
-QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container)
+QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container drawbridge-bootstrap.container)
 KEA_DHCP4_SERVICE="kea-dhcp4-server"
 KEA_CTRL_AGENT_SERVICE="kea-ctrl-agent"
 
@@ -73,6 +74,7 @@ else
     echo "==> Fetching kea/*.conf and quadlet/ unit files from $RAW_BASE"
     curl -fsSL "$RAW_BASE/kea/kea-dhcp4.conf" -o "$kea_conf_dir/kea-dhcp4.conf"
     curl -fsSL "$RAW_BASE/kea/kea-ctrl-agent.conf" -o "$kea_conf_dir/kea-ctrl-agent.conf"
+    curl -fsSL "$RAW_BASE/kea/rsyslog-kea-forward.conf" -o "$kea_conf_dir/rsyslog-kea-forward.conf"
     for f in "${QUADLET_FILES[@]}"; do
         curl -fsSL "$RAW_BASE/quadlet/$f" -o "$kea_conf_dir/$f"
     done
@@ -225,6 +227,22 @@ for conf in kea-dhcp4.conf kea-ctrl-agent.conf; do
     sudo install -m 644 "$kea_conf_dir/$conf" "/etc/kea/$conf"
 done
 
+# kea-dhcp4.conf/kea-ctrl-agent.conf's "loggers" blocks (above) send Kea's
+# own logs to local syslog, facility local0 - this rule forwards just that
+# facility into drawbridge-rsyslog's second listener (:10515, separate from
+# device syslog on :10514) so it's queryable via GET /api/v1/kea-logs
+# instead of tcpdump/journalctl. See docs/logging.md. Ubuntu/Debian (the
+# only hosts install.sh supports) ship rsyslog by default, so no package
+# install step is needed here, only the drop-in and a reload.
+if command -v rsyslogd >/dev/null 2>&1; then
+    echo "==> Installing Kea syslog forwarding rule"
+    sudo install -d -m 755 /etc/rsyslog.d
+    sudo install -m 644 "$kea_conf_dir/rsyslog-kea-forward.conf" /etc/rsyslog.d/49-drawbridge-kea.conf
+    sudo systemctl reload-or-restart rsyslog
+else
+    echo "==> rsyslog not found - skipping Kea syslog forwarding rule (Kea logs won't reach GET /api/v1/kea-logs)"
+fi
+
 # kea-ctrl-agent's packaged systemd unit has
 # ConditionFileNotEmpty=/etc/kea/kea-api-password and just silently skips
 # starting (not even a failure exit) if that file is missing/empty -
@@ -253,7 +271,7 @@ echo "==> Enabling and restarting Kea services"
 sudo systemctl enable --now "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
 sudo systemctl restart "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
 
-echo "==> Pulling $IMAGE and $RSYSLOG_IMAGE"
+echo "==> Pulling $IMAGE, $RSYSLOG_IMAGE, and $BOOTSTRAP_IMAGE"
 # Deliberately not sudo'd - the Quadlet units below run as rootless
 # containers under your own systemd --user instance (see
 # docs/deployment.md), reading from your own rootless podman storage
@@ -263,6 +281,7 @@ echo "==> Pulling $IMAGE and $RSYSLOG_IMAGE"
 # pointless as well as wrong.
 podman pull "$IMAGE"
 podman pull "$RSYSLOG_IMAGE"
+podman pull "$BOOTSTRAP_IMAGE"
 
 # The Quadlet units run as rootless containers under your own systemd
 # --user instance (see docs/deployment.md), installed into your own $HOME.

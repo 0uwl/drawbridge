@@ -6,11 +6,10 @@ import type { FileType } from '../types'
 export const ALLOWED_EXTENSIONS: Record<FileType, string[]> = {
   image: ['bin', 'spa', 'pkg', 'tar'],
   config: ['cfg', 'conf', 'txt'],
-  script: ['py', 'tcl', 'sh'],
 }
 
-export const TYPE_PLURAL: Record<FileType, string> = { image: 'images', config: 'configs', script: 'scripts' }
-export const TYPE_LABELS: Record<FileType, string> = { image: 'Image', config: 'Config', script: 'Script' }
+export const TYPE_PLURAL: Record<FileType, string> = { image: 'images', config: 'configs' }
+export const TYPE_LABELS: Record<FileType, string> = { image: 'Image', config: 'Config' }
 
 export function inferFileType(filename: string): FileType | null {
   const ext = filename.split('.').pop()?.toLowerCase()

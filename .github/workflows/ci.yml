@@ -34,7 +34,9 @@ jobs:
               - 'pyproject.toml'
               - 'Containerfile'
               - 'Containerfile.rsyslog'
+              - 'Containerfile.bootstrap'
               - 'container/**'
+              - 'scripts/**'
               - 'kea/**'
               - 'quadlet/**'
               - 'install.sh'
@@ -92,6 +94,12 @@ jobs:
         uses: immanuwell/dockerfile-roast@1.4.4
         with:
           files: 'Containerfile.rsyslog'
+          engine: podman
+          preset: production
+      - name: Containerfile.bootstrap linting
+        uses: immanuwell/dockerfile-roast@1.4.4
+        with:
+          files: 'Containerfile.bootstrap'
           engine: podman
           preset: production
       - name: Kea config syntax check
@@ -212,3 +220,16 @@ jobs:
           tags: ghcr.io/${{ github.repository }}-rsyslog:${{ steps.tag.outputs.tag }}
           cache-from: type=gha,scope=drawbridge-rsyslog
           cache-to: type=gha,scope=drawbridge-rsyslog,mode=max
+      # Sibling image for the ZTP script bootstrap server (see
+      # docs/decisions.md, "HTTPS cert trust on C9200CX"). context stays
+      # repo root: its COPY scripts/ztp-base.py is a root-relative path,
+      # same pattern as the main image's frontend/ COPY.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile.bootstrap
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}-bootstrap:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=drawbridge-bootstrap
+          cache-to: type=gha,scope=drawbridge-bootstrap,mode=max

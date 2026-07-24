@@ -11,10 +11,13 @@ import pytest
 
 KEA_DIR = Path(__file__).parent.parent / 'kea'
 SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
-APP_PORT = 8080  # DRAWBRIDGE_PORT's default (see docs/deployment.md) — this
-# config's Option 67 URL is static and isn't read from that env var, so this
-# constant would need updating by hand alongside kea-dhcp4.conf if the
-# project's default port ever changed
+APP_PORT = 8080  # DRAWBRIDGE_PORT's default (see docs/deployment.md) — not
+# used by Option 67 (see BOOTSTRAP_PORT below), kept for other tests/future use
+BOOTSTRAP_PORT = 8090  # drawbridge-bootstrap's fixed port (Containerfile.bootstrap,
+# quadlet/drawbridge-bootstrap.container) — Option 67 points here, not at
+# APP_PORT, since this fetch can't use TLS (see docs/decisions.md, "HTTPS
+# cert trust on C9200CX"). Static, not read from any env var — would need
+# updating by hand alongside kea-dhcp4.conf if this port ever changed
 
 
 def _load_jsonc(path: Path) -> dict:
@@ -52,18 +55,21 @@ def test_boot_file_name_basename_matches_ztp_script(cisco_class):
     assert (SCRIPTS_DIR / 'ztp-base.py').is_file()
 
 
-def test_boot_file_name_path_matches_files_download_route(cisco_class):
-    # files.py's blueprint is registered under url_prefix='/files' (see
-    # main.py) with a GET /scripts/<filename> route inside it — the full
-    # device-facing path is /files/scripts/<filename>, not /scripts/<filename>.
+def test_boot_file_name_path_matches_bootstrap_server(cisco_class):
+    # drawbridge-bootstrap (Containerfile.bootstrap) serves ztp-base.py at
+    # its URL root ("httpd ... -h /scripts"), not under /files/scripts/ —
+    # that Flask route no longer exists (see docs/decisions.md).
     boot_file = next(o for o in cisco_class['option-data'] if o['name'] == 'boot-file-name')
     url_path = urlparse(boot_file['data']).path
-    assert url_path == '/files/scripts/ztp-base.py'
+    assert url_path == '/ztp-base.py'
 
 
-def test_boot_file_name_uses_https(cisco_class):
+def test_boot_file_name_uses_plain_http(cisco_class):
+    # Deliberately not HTTPS — this fetch happens before any script code
+    # has run, so there's no way to pre-establish trust for a self-signed
+    # cert ahead of it. See docs/decisions.md, "HTTPS cert trust on C9200CX".
     boot_file = next(o for o in cisco_class['option-data'] if o['name'] == 'boot-file-name')
-    assert urlparse(boot_file['data']).scheme == 'https'
+    assert urlparse(boot_file['data']).scheme == 'http'
 
 
 def test_boot_file_name_host_is_in_configured_subnet(dhcp4_conf, cisco_class):
@@ -73,7 +79,7 @@ def test_boot_file_name_host_is_in_configured_subnet(dhcp4_conf, cisco_class):
 
     subnet = dhcp4_conf['subnet4'][0]['subnet']
     assert ipaddress.ip_address(host) in ipaddress.ip_network(subnet)
-    assert port == APP_PORT
+    assert port == BOOTSTRAP_PORT
 
 
 def test_known_network_vendor_only_references_defined_classes(dhcp4_conf):

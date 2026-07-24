@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from drawbridge.models import Device, DeviceLogEntry, ProvisioningSession, ProvisioningLog, Setting, User, ZTPFile, utcnow_iso
+from drawbridge.models import Device, DeviceLogEntry, KeaLogEntry, ProvisioningSession, ProvisioningLog, Setting, User, ZTPFile, utcnow_iso
 
 # Device queries
 
@@ -33,14 +33,13 @@ def add_device(
     description: str | None = None,
     image: str | None = None,
     config_file: str | None = None,
-    script: str | None = None,
     added_by: str | None = None,
 ) -> Device:
     """Idempotent on serial: re-registering an existing serial updates its
     mutable fields instead of raising on the primary-key collision.
 
-    image, config_file, and script fall back to their default_* Setting rows
-    on creation only — re-registration leaves them unchanged if not explicitly
+    image and config_file fall back to their default_* Setting rows on
+    creation only — re-registration leaves them unchanged if not explicitly
     provided."""
     device = session.get(Device, serial)
     if device is not None:
@@ -51,8 +50,6 @@ def add_device(
             device.image = image
         if config_file is not None:
             device.config_file = config_file
-        if script is not None:
-            device.script = script
         return device
 
     if image is None:
@@ -63,13 +60,33 @@ def add_device(
         setting = get_setting(session, 'default_config_file')
         if setting is not None:
             config_file = setting.value
-    if script is None:
-        setting = get_setting(session, 'default_script')
-        if setting is not None:
-            script = setting.value
 
-    device = Device(serial=serial, mac=mac, description=description, image=image, config_file=config_file, script=script, added_by=added_by)
+    device = Device(serial=serial, mac=mac, description=description, image=image, config_file=config_file, added_by=added_by)
     session.add(device)
+    return device
+
+
+def update_device(
+    session: Session,
+    serial: str,
+    *,
+    mac: str | None = None,
+    description: str | None = None,
+    image: str | None = None,
+    config_file: str | None = None,
+) -> Device | None:
+    """Edits an existing allowlist entry in place. Returns None (does not
+    create) when the serial doesn't already exist — unlike add_device's
+    re-registration path, an admin editing a typo'd serial should 404, not
+    silently create a new device."""
+    device = session.get(Device, serial)
+    if device is None:
+        return None
+
+    device.mac = mac
+    device.description = description
+    device.image = image
+    device.config_file = config_file
     return device
 
 
@@ -408,3 +425,37 @@ def delete_device_logs_by_serial(session: Session, serial: str) -> None:
     for watching that run in progress; it doesn't need to wait out
     log_retention_days the way a failure's does (see docs/database.md)."""
     session.execute(delete(DeviceLogEntry).where(DeviceLogEntry.serial == serial))
+
+
+# KeaLogEntry queries
+
+def add_kea_log_entry(session: Session, *, message: str) -> KeaLogEntry:
+    """Writes one KeaLogEntry row, purging expired rows first per the same
+    lazy-retention policy add_device_log_entry uses (shared
+    log_retention_days setting — see docs/database.md)."""
+    retention = get_setting(session, 'log_retention_days')
+    if retention is not None:
+        purge_expired_kea_logs(session, retention.value)
+
+    entry = KeaLogEntry(message=message)
+    session.add(entry)
+    return entry
+
+
+def list_kea_logs(session: Session, after_id: int | None = None) -> list[KeaLogEntry]:
+    """after_id lets a poller fetch only rows newer than the last one it
+    already has — same pattern as list_device_logs (see docs/api.md)."""
+    stmt = select(KeaLogEntry).order_by(KeaLogEntry.timestamp.desc())
+    if after_id is not None:
+        stmt = stmt.where(KeaLogEntry.id > after_id)
+    return list(session.scalars(stmt).all())
+
+
+def purge_expired_kea_logs(session: Session, retention_days: str) -> None:
+    """Deletes KeaLogEntry rows older than retention_days. A no-op when
+    retention is the literal string 'indefinite' (see purge_expired_logs)."""
+    if retention_days == 'indefinite':
+        return
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=int(retention_days))).isoformat(timespec='microseconds')
+    session.execute(delete(KeaLogEntry).where(KeaLogEntry.timestamp < cutoff))

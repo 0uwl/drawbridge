@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from drawbridge import queries
-from drawbridge.models import DeviceLogEntry, ProvisioningLog, ProvisioningSession, Setting
+from drawbridge.models import DeviceLogEntry, KeaLogEntry, ProvisioningLog, ProvisioningSession, Setting
 
 
 # add_device
@@ -29,14 +29,13 @@ def test_add_device_is_idempotent_on_serial(session):
     assert devices[0].description == 'second'
 
 
-def test_add_device_stores_image_config_file_and_script(session):
-    queries.add_device(session, serial='SN1', image='ios-xe-17.9.bin', config_file='spine.cfg', script='ztp-spine.py')
+def test_add_device_stores_image_and_config_file(session):
+    queries.add_device(session, serial='SN1', image='ios-xe-17.9.bin', config_file='spine.cfg')
     session.commit()
 
     device = queries.get_device(session, 'SN1')
     assert device.image == 'ios-xe-17.9.bin'
     assert device.config_file == 'spine.cfg'
-    assert device.script == 'ztp-spine.py'
 
 
 def test_add_device_uses_default_image_from_setting(session):
@@ -69,26 +68,6 @@ def test_add_device_explicit_image_overrides_default(session):
     assert queries.get_device(session, 'SN1').image == 'ios-xe-custom.bin'
 
 
-def test_add_device_uses_default_script_from_setting(session):
-    session.add(Setting(key='default_script', value='ztp-base.py'))
-    session.commit()
-
-    queries.add_device(session, serial='SN1')
-    session.commit()
-
-    assert queries.get_device(session, 'SN1').script == 'ztp-base.py'
-
-
-def test_add_device_explicit_script_overrides_default(session):
-    session.add(Setting(key='default_script', value='ztp-base.py'))
-    session.commit()
-
-    queries.add_device(session, serial='SN1', script='ztp-spine.py')
-    session.commit()
-
-    assert queries.get_device(session, 'SN1').script == 'ztp-spine.py'
-
-
 def test_add_device_reregistration_preserves_image_when_not_provided(session):
     queries.add_device(session, serial='SN1', image='ios-xe-17.9.bin')
     session.commit()
@@ -109,24 +88,32 @@ def test_add_device_reregistration_updates_image_when_provided(session):
     assert queries.get_device(session, 'SN1').image == 'ios-xe-17.12.bin'
 
 
-def test_add_device_reregistration_preserves_script_when_not_provided(session):
-    queries.add_device(session, serial='SN1', script='ztp-spine.py')
+# update_device
+
+def test_update_device_returns_none_when_not_found(session):
+    assert queries.update_device(session, 'NOSUCHSERIAL', description='x') is None
+
+
+def test_update_device_edits_existing_fields(session):
+    queries.add_device(session, serial='SN1', mac='aa:bb', description='old', image='old.bin', config_file='old.cfg')
     session.commit()
 
-    queries.add_device(session, serial='SN1', mac='aa:bb')
+    updated = queries.update_device(
+        session, 'SN1', mac='cc:dd', description='new', image='new.bin', config_file='new.cfg',
+    )
     session.commit()
 
-    assert queries.get_device(session, 'SN1').script == 'ztp-spine.py'
+    assert updated.mac == 'cc:dd'
+    assert updated.description == 'new'
+    assert updated.image == 'new.bin'
+    assert updated.config_file == 'new.cfg'
 
 
-def test_add_device_reregistration_updates_script_when_provided(session):
-    queries.add_device(session, serial='SN1', script='ztp-spine.py')
+def test_update_device_does_not_create_a_new_device(session):
+    queries.update_device(session, 'SN1', description='x')
     session.commit()
 
-    queries.add_device(session, serial='SN1', script='ztp-leaf.py')
-    session.commit()
-
-    assert queries.get_device(session, 'SN1').script == 'ztp-leaf.py'
+    assert queries.get_device(session, 'SN1') is None
 
 
 def test_delete_device(session):
@@ -478,3 +465,68 @@ def test_delete_device_logs_by_serial_leaves_other_serials_alone(session):
     remaining = session.query(DeviceLogEntry).all()
     assert len(remaining) == 1
     assert remaining[0].serial == 'SN2'
+
+
+# KeaLogEntry queries
+
+def test_add_kea_log_entry_writes_a_row(session):
+    entry = queries.add_kea_log_entry(session, message='DHCPDISCOVER received')
+    session.commit()
+
+    assert entry.id is not None
+    rows = session.query(KeaLogEntry).all()
+    assert len(rows) == 1
+    assert rows[0].message == 'DHCPDISCOVER received'
+
+
+def test_list_kea_logs_after_id_returns_only_newer_rows(session):
+    first = queries.add_kea_log_entry(session, message='a')
+    session.commit()
+    second = queries.add_kea_log_entry(session, message='b')
+    session.commit()
+
+    newer = queries.list_kea_logs(session, after_id=first.id)
+    assert [e.id for e in newer] == [second.id]
+
+
+def test_list_kea_logs_after_id_returns_empty_when_nothing_newer(session):
+    entry = queries.add_kea_log_entry(session, message='a')
+    session.commit()
+
+    assert queries.list_kea_logs(session, after_id=entry.id) == []
+
+
+def test_purge_expired_kea_logs_removes_rows_older_than_retention(session):
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(timespec='microseconds')
+    session.add(KeaLogEntry(message='old', timestamp=old_ts))
+    session.commit()
+
+    queries.purge_expired_kea_logs(session, '5')
+    session.commit()
+
+    assert session.query(KeaLogEntry).count() == 0
+
+
+def test_purge_expired_kea_logs_is_a_noop_when_retention_is_indefinite(session):
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=9999)).isoformat(timespec='microseconds')
+    session.add(KeaLogEntry(message='old', timestamp=old_ts))
+    session.commit()
+
+    queries.purge_expired_kea_logs(session, 'indefinite')
+    session.commit()
+
+    assert session.query(KeaLogEntry).count() == 1
+
+
+def test_add_kea_log_entry_purges_expired_rows_before_inserting(session):
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat(timespec='microseconds')
+    session.add(KeaLogEntry(message='old', timestamp=old_ts))
+    session.commit()
+    # default retention seeded from LOG_RETENTION_DAYS config ('30')
+
+    queries.add_kea_log_entry(session, message='new')
+    session.commit()
+
+    rows = session.query(KeaLogEntry).all()
+    assert len(rows) == 1
+    assert rows[0].message == 'new'

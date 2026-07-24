@@ -53,24 +53,6 @@ def test_init_db_does_not_seed_default_config_file_when_not_configured(app):
         assert get_session().get(Setting, 'default_config_file') is None
 
 
-def test_init_db_seeds_default_script_when_configured(tmp_path):
-    app = create_app({
-        'TESTING': True,
-        'DATABASE_PATH': str(tmp_path / 'drawbridge.db'),
-        'FILES_PATH': str(tmp_path / 'files'),
-        'DEFAULT_SCRIPT': 'ztp-base.py',
-    })
-    with app.app_context():
-        setting = get_session().get(Setting, 'default_script')
-        assert setting is not None
-        assert setting.value == 'ztp-base.py'
-
-
-def test_init_db_does_not_seed_default_script_when_not_configured(app):
-    with app.app_context():
-        assert get_session().get(Setting, 'default_script') is None
-
-
 def test_init_db_bootstraps_exactly_one_admin_user(app):
     with app.app_context():
         session = get_session()

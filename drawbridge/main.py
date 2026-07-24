@@ -18,7 +18,6 @@ SQLITE_BUSY_TIMEOUT_MS = '1000'
 LOG_RETENTION_DAYS = '30'
 DEFAULT_IMAGE = None
 DEFAULT_CONFIG_FILE = None
-DEFAULT_SCRIPT = None
 ADMIN_PASSWORD = None
 CREDENTIALS_DIRECTORY = None
 TLS_CERT_PATH = '/app/data/tls/cert.pem'
@@ -47,7 +46,6 @@ def create_app(config_dict: dict = {}):
     app.config['LOG_RETENTION_DAYS'] = os.getenv('LOG_RETENTION_DAYS', LOG_RETENTION_DAYS)
     app.config['DEFAULT_IMAGE'] = os.getenv('DEFAULT_IMAGE', DEFAULT_IMAGE)
     app.config['DEFAULT_CONFIG_FILE'] = os.getenv('DEFAULT_CONFIG_FILE', DEFAULT_CONFIG_FILE)
-    app.config['DEFAULT_SCRIPT'] = os.getenv('DEFAULT_SCRIPT', DEFAULT_SCRIPT)
     app.config['ADMIN_PASSWORD'] = os.getenv('ADMIN_PASSWORD', ADMIN_PASSWORD)
     app.config['CREDENTIALS_DIRECTORY'] = os.getenv('CREDENTIALS_DIRECTORY', CREDENTIALS_DIRECTORY)
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')  # no default — see check below
@@ -126,7 +124,11 @@ def create_app(config_dict: dict = {}):
     app.register_blueprint(device_logs.create_blueprint(), url_prefix=API_PREFIX)
     app.logger.debug("Registered Blueprint 'device_logs.py'")
 
-    for subdir in ('images', 'configs', 'scripts'):
+    from drawbridge.api import kea_logs
+    app.register_blueprint(kea_logs.create_blueprint(), url_prefix=API_PREFIX)
+    app.logger.debug("Registered Blueprint 'kea_logs.py'")
+
+    for subdir in ('images', 'configs'):
         os.makedirs(os.path.join(app.config['FILES_PATH'], subdir), exist_ok=True)
 
     init_login_manager(app)

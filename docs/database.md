@@ -22,7 +22,6 @@ class Device(Base):
     description: Mapped[str | None]
     image: Mapped[str | None]        # falls back to default_image Setting on creation
     config_file: Mapped[str | None]  # falls back to default_config_file Setting on creation
-    script: Mapped[str | None]       # falls back to default_script Setting on creation
     added_at: Mapped[str]
     added_by: Mapped[str | None]
 
@@ -70,7 +69,7 @@ class ZTPFile(Base):
     (file_type, filename) — the same filename may exist under different types."""
     __tablename__ = 'ztp_files'
 
-    file_type:   Mapped[str] = mapped_column(primary_key=True)  # 'image', 'config', 'script'
+    file_type:   Mapped[str] = mapped_column(primary_key=True)  # 'image', 'config'
     filename:    Mapped[str] = mapped_column(primary_key=True)
     size_bytes:  Mapped[int]
     sha256:      Mapped[str]
@@ -160,9 +159,10 @@ closes that specific gap: right after `create_all()`, inside the same
 cross-process bootstrap lock, it explicitly (re)creates every index
 declared on the models with `checkfirst=True`, so an upgrade picks up
 index changes without needing a fresh install. This covers index
-additions only — `DeviceLogEntry.timestamp` and `ProvisioningLog.timestamp`
-are both indexed today, supporting the lazy-purge queries below, which
-would otherwise be full table scans on every single insert. Column
+additions only — `DeviceLogEntry.timestamp`, `KeaLogEntry.timestamp`, and
+`ProvisioningLog.timestamp` are all indexed today, supporting the lazy-purge
+queries below, which would otherwise be full table scans on every single
+insert. Column
 additions/type changes are a different, harder problem this doesn't
 attempt to solve; none exist yet.
 
@@ -270,3 +270,11 @@ troubleshooting, not asset tracking.
   that serial's `DeviceLogEntry` rows unconditionally — a device that's no
   longer allowlisted has nothing left for Drawbridge to track except its
   `ProvisioningLog` history).
+- `KeaLogEntry` (see [logging.md](logging.md)) also shares
+  `log_retention_days`, purged lazily on insert the same way
+  `ProvisioningLog` is — there's no per-successful-run early-clear behavior
+  here the way `DeviceLogEntry` has, since a Kea log line was never tied to
+  one device's run to begin with. No `serial`/MAC column exists on this
+  table at all — Kea's own DHCP server logs carry no device-identifying
+  content in Drawbridge's schema, so there's nothing to minimise beyond the
+  normal time-based purge.

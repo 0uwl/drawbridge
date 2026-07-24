@@ -67,7 +67,7 @@
   decorator — there's no secret an anonymous device could hold), so an
   attacker on the VLAN could enumerate serials via its 404-vs-200 response
   to fingerprint which devices are registered. Not defended against for
-  alpha — a 404 leaks no config/image/script content, and this attacker
+  alpha — a 404 leaks no config/image content, and this attacker
   already doesn't need Drawbridge's cooperation for anything more
   damaging. Revisit if the threat model ever includes a less-trusted VLAN.
 
@@ -139,6 +139,24 @@
   Scope this once real per-device provisioning logic is built and tested
   against hardware, not before.
 
+- **Per-device script selection removed (v0.3.1), not deferred like
+  facts-first above — it never actually drove anything.** `Device.script`,
+  a `default_script` setting, and a full `/files/scripts/*` upload API let
+  an operator pick a different ZTP script per device, but Kea's Option 67
+  `boot-file-name` has always hardcoded the delivered filename to
+  `ztp-base.py`, and the script itself never read a "next script" field
+  back from `/api/provision-request` to chain-fetch anything else. No
+  matter what an admin uploaded under a different name, devices only ever
+  fetched whatever was literally named `ztp-base.py` — the whole
+  selection layer was dead weight, not a working feature being cut for
+  scope. Removed outright rather than wired up, since the same
+  "facts-first" reasoning above still applies to *real* per-device script
+  selection: it's Day-0 provisioning logic that needs hardware-tested
+  design, not something to bolt onto an unused upload API. `ztp-base.py`
+  is now baked into `Containerfile.bootstrap` at build time instead (see
+  "HTTPS cert trust on C9200CX" below) — one script, versioned with the
+  release, no DB-backed selection at all.
+
 - **C9200CX network stack isolation — `/api/provision-complete` accepts PUT.**
   Python scripts running on the C9200CX are entirely isolated from the device's
   own network stack; direct socket calls from the ZTP script fail. The
@@ -163,18 +181,25 @@
   `copy https://` call. A self-signed cert is a valid trust anchor on its
   own for this purpose — no real CA hierarchy is required, `crypto pki
   authenticate` just needs to be pointed at whatever cert Drawbridge is
-  actually serving. **Open risk, not resolved by this implementation:** the
-  very first fetch — the ZTP script itself, via DHCP Option 67
-  `boot-file-name` — happens before any script code runs, so there's no
-  opportunity to import a trustpoint ahead of it. Cisco's Classic ZTP
-  documentation describes this fetch with no certificate-validation step at
-  all (unlike "Secure ZTP," a different, SUDI-based Cisco mechanism this
-  project deliberately doesn't use — see "No sZTP" above). Whether the boot
-  agent even honors `https://` in `boot-file-name` the way this assumes, and
-  what it does with an unverifiable cert on that first fetch, is unconfirmed
-  without lab hardware — same posture as other C9200CX-dependent behavior in
-  this file: documented as manually verified, not something this diff can
-  close out.
+  actually serving. **Resolved (v0.3.1) for the one fetch that can't use a
+  trustpoint at all:** the very first fetch — the ZTP script itself, via DHCP
+  Option 67 `boot-file-name` — happens before any script code runs, so
+  there's no opportunity to import a trustpoint ahead of it, and Cisco's
+  Classic ZTP documentation describes this fetch with no
+  certificate-validation step at all (unlike "Secure ZTP," a different,
+  SUDI-based Cisco mechanism this project deliberately doesn't use — see "No
+  sZTP" above). Rather than treat that as an open risk to work around later,
+  v0.3.1 removes the cert-trust question from this fetch entirely: Option 67
+  now points at a separate, deliberately plain-HTTP `drawbridge-bootstrap`
+  container (`Containerfile.bootstrap`, port 8090) instead of Drawbridge's
+  own HTTPS listener, structurally matching what Cisco's own docs already
+  assume for this step. Everything the script does *after* that first fetch
+  — phone-home, completion callback, image/config download — is unaffected
+  and still goes through the trustpoint-based validation path described
+  above. **Still unconfirmed without lab hardware:** whether the boot agent's
+  plain-HTTP fetch of `boot-file-name` itself behaves as assumed — same
+  posture as other C9200CX-dependent behavior in this file: documented as
+  manually verified, not something this diff can close out.
 
 - **`files.py`'s file-serving routes use `<path:filename>`, not
   `<string:filename>`.** `<string:...>` excludes `/` from what it matches, so
