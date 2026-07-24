@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Installs podman and Kea on an Ubuntu/Debian provisioning host (amd64 or
 # arm64, e.g. Raspberry Pi OS) if not already present, installs Drawbridge's
-# kea/*.conf into /etc/kea, installs the four Quadlet unit files (the pod
-# plus its three member containers) for the invoking user, and pulls the
-# three published container images. Does not start the Drawbridge pod itself —
+# kea/*.conf into /etc/kea, installs the five Quadlet unit files (the pod
+# plus its four member containers) for the invoking user, and pulls the
+# four published container images. Does not start the Drawbridge pod itself —
 # SECRET_KEY and the host data directories still need setting up by hand;
 # see the "Done" message this script prints and docs/deployment.md.
 #
@@ -52,11 +52,12 @@ fi
 IMAGE="ghcr.io/0uwl/drawbridge:$IMAGE_TAG"
 RSYSLOG_IMAGE="ghcr.io/0uwl/drawbridge-rsyslog:$IMAGE_TAG"
 BOOTSTRAP_IMAGE="ghcr.io/0uwl/drawbridge-bootstrap:$IMAGE_TAG"
+NGINX_IMAGE="ghcr.io/0uwl/drawbridge-nginx:$IMAGE_TAG"
 # Pod unit first: drawbridge.container's Pod= reference means Quadlet needs
 # it present at daemon-reload time, though install order here doesn't
-# actually matter (all four land before the daemon-reload this script
+# actually matter (all five land before the daemon-reload this script
 # tells the operator to run at the end).
-QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container drawbridge-bootstrap.container)
+QUADLET_FILES=(drawbridge.pod drawbridge.container drawbridge-rsyslog.container drawbridge-bootstrap.container drawbridge-nginx.container)
 KEA_DHCP4_SERVICE="kea-dhcp4-server"
 KEA_CTRL_AGENT_SERVICE="kea-ctrl-agent"
 
@@ -64,6 +65,7 @@ script_source="${BASH_SOURCE[0]:-}"
 if [ -n "$script_source" ] && script_dir="$(cd "$(dirname "$script_source")" >/dev/null 2>&1 && pwd)" && [ -f "$script_dir/kea/kea-dhcp4.conf" ]; then
     kea_conf_dir="$script_dir/kea"
     quadlet_src_dir="$script_dir/quadlet"
+    ztp_script_src="$script_dir/scripts/ztp-base.py"
 else
     if ! command -v curl >/dev/null 2>&1; then
         echo "install.sh needs curl to fetch kea/*.conf and the quadlet/ unit files when run without a repo checkout" >&2
@@ -75,10 +77,12 @@ else
     curl -fsSL "$RAW_BASE/kea/kea-dhcp4.conf" -o "$kea_conf_dir/kea-dhcp4.conf"
     curl -fsSL "$RAW_BASE/kea/kea-ctrl-agent.conf" -o "$kea_conf_dir/kea-ctrl-agent.conf"
     curl -fsSL "$RAW_BASE/kea/rsyslog-kea-forward.conf" -o "$kea_conf_dir/rsyslog-kea-forward.conf"
+    curl -fsSL "$RAW_BASE/scripts/ztp-base.py" -o "$kea_conf_dir/ztp-base.py"
     for f in "${QUADLET_FILES[@]}"; do
         curl -fsSL "$RAW_BASE/quadlet/$f" -o "$kea_conf_dir/$f"
     done
     quadlet_src_dir="$kea_conf_dir"
+    ztp_script_src="$kea_conf_dir/ztp-base.py"
 fi
 
 if [ "$(id -u)" -eq 0 ]; then
@@ -271,7 +275,7 @@ echo "==> Enabling and restarting Kea services"
 sudo systemctl enable --now "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
 sudo systemctl restart "$KEA_DHCP4_SERVICE" "$KEA_CTRL_AGENT_SERVICE"
 
-echo "==> Pulling $IMAGE, $RSYSLOG_IMAGE, and $BOOTSTRAP_IMAGE"
+echo "==> Pulling $IMAGE, $RSYSLOG_IMAGE, $BOOTSTRAP_IMAGE, and $NGINX_IMAGE"
 # Deliberately not sudo'd - the Quadlet units below run as rootless
 # containers under your own systemd --user instance (see
 # docs/deployment.md), reading from your own rootless podman storage
@@ -282,6 +286,7 @@ echo "==> Pulling $IMAGE, $RSYSLOG_IMAGE, and $BOOTSTRAP_IMAGE"
 podman pull "$IMAGE"
 podman pull "$RSYSLOG_IMAGE"
 podman pull "$BOOTSTRAP_IMAGE"
+podman pull "$NGINX_IMAGE"
 
 # The Quadlet units run as rootless containers under your own systemd
 # --user instance (see docs/deployment.md), installed into your own $HOME.
@@ -320,8 +325,23 @@ for f in "${QUADLET_FILES[@]}"; do
     fi
 done
 
+# drawbridge-bootstrap.container bind-mounts this directory read-only (see
+# Containerfile.bootstrap) - created and seeded here, before the pod is
+# ever started, so there's no race between it and drawbridge.container over
+# who creates it first (which would otherwise leave it root-owned under
+# UserNS=keep-id). Only copied if missing, same "never clobber an
+# operator's edits" posture as the Quadlet units above - re-running
+# install.sh must not overwrite a already-customized ztp-base.py.
+ztp_script_dir="$HOME/.local/share/drawbridge/files/scripts"
+mkdir -p "$ztp_script_dir"
+if [ ! -f "$ztp_script_dir/ztp-base.py" ]; then
+    echo "==> Seeding $ztp_script_dir/ztp-base.py"
+    install -m 644 "$ztp_script_src" "$ztp_script_dir/ztp-base.py"
+fi
+
 echo "==> Done. Before starting the pod:"
 echo "      - edit SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) in $quadlet_dir/drawbridge.container"
+echo "      - edit DRAWBRIDGE_HOST and DRAWBRIDGE_CA_CERT_PEM in $ztp_script_dir/ztp-base.py for this deployment"
 echo "      - mkdir -p $HOME/.local/share/drawbridge/{data,files}"
 echo "      - systemctl --user daemon-reload && systemctl --user start drawbridge-pod.service"
 echo "    See docs/deployment.md for details."

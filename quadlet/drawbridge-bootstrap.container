@@ -1,8 +1,11 @@
 # Pod member — see quadlet/drawbridge.pod for the pod-level settings
-# shared with drawbridge.container/drawbridge-rsyslog.container
-# (PublishPort=, UserNS=) and for install/host-prep instructions. See
-# docs/decisions.md ("HTTPS cert trust on C9200CX") for why this container
-# exists at all.
+# shared with drawbridge.container/drawbridge-rsyslog.container/
+# drawbridge-nginx.container (PublishPort=, UserNS=) and for install/
+# host-prep instructions. See docs/decisions.md ("HTTPS cert trust on
+# C9200CX") for why this container exists at all, and v0-3-2.md for why
+# it's deliberately kept separate from drawbridge-nginx rather than folded
+# in: ZTP script serving is core, non-optional functionality, unlike
+# nginx/rsyslog which are both meant to be independently skippable.
 
 [Unit]
 Description=Drawbridge ZTP script bootstrap server
@@ -12,10 +15,16 @@ Image=ghcr.io/0uwl/drawbridge-bootstrap:latest
 ContainerName=drawbridge-bootstrap
 Pod=drawbridge.pod
 
-# No volume mount: the ZTP script is baked into the image at build time
-# (Containerfile.bootstrap), not admin-uploaded, so there's nothing on the
-# host to bind-mount and no ordering dependency on drawbridge.container
-# having created any host directory first.
+# Read-only, and scoped to just files/scripts — not the whole files/ tree
+# drawbridge.container mounts at /app/files. scripts/ztp-base.py has
+# deployment-specific constants (DRAWBRIDGE_HOST, DRAWBRIDGE_CA_CERT_PEM)
+# every operator must hand-edit, so it's bind-mounted rather than baked
+# into the image — see Containerfile.bootstrap. install.sh creates this
+# directory and seeds it with the repo's ztp-base.py on first install
+# (before the pod ever starts), so there's no ownership race between this
+# container and drawbridge.container over who creates it first.
+Volume=%h/.local/share/drawbridge/files/scripts:/scripts:ro,Z
+
 ReadOnly=true
 
 [Service]

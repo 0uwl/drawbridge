@@ -12,11 +12,11 @@ ContainerName=drawbridge-rsyslog
 Pod=drawbridge.pod
 
 # No volume mount at all: this container never touches Drawbridge's data
-# directory. It doesn't need the TLS cert (container/rsyslog-drawbridge.conf's
-# omhttp action uses allowunsignedcerts="on" instead of tls.cacert — see
-# docs/logging.md) or its own persistent state — workDirectory is /tmp
-# (Tmpfs= below), and -i NONE (Containerfile.rsyslog's ENTRYPOINT) means no
-# pid file is ever written.
+# directory. It doesn't need the TLS cert — its omhttp actions talk plain
+# HTTP to Gunicorn's internal-only port now, no TLS on that hop at all
+# (see container/rsyslog-drawbridge.conf, v0-3-2.md) — or its own
+# persistent state — workDirectory is /tmp (Tmpfs= below), and -i NONE
+# (Containerfile.rsyslog's ENTRYPOINT) means no pid file is ever written.
 
 ReadOnly=true
 Tmpfs=/tmp

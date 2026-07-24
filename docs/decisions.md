@@ -153,9 +153,12 @@
   "facts-first" reasoning above still applies to *real* per-device script
   selection: it's Day-0 provisioning logic that needs hardware-tested
   design, not something to bolt onto an unused upload API. `ztp-base.py`
-  is now baked into `Containerfile.bootstrap` at build time instead (see
-  "HTTPS cert trust on C9200CX" below) — one script, versioned with the
-  release, no DB-backed selection at all.
+  is now served via `drawbridge-bootstrap`'s bind mount instead (see
+  "HTTPS cert trust on C9200CX" below) — one script, no DB-backed
+  selection at all, but still editable in place per deployment (it has
+  deployment-specific constants — `DRAWBRIDGE_HOST`, `DRAWBRIDGE_CA_CERT_PEM`
+  — an operator must set), so this isn't a return to a build-time-only
+  artifact the way images/configs were considered and rejected for.
 
 - **C9200CX network stack isolation — `/api/provision-complete` accepts PUT.**
   Python scripts running on the C9200CX are entirely isolated from the device's
@@ -270,17 +273,27 @@
   one-liner installs a fixed, reproducible version rather than
   tip-of-branch.
 
-- **`DRAWBRIDGE_PORT` controls where the app listens, but two other
-  hardcoded `8080`s aren't wired to it.** `drawbridge/gunicorn.conf.py`'s
-  bind, `dev.sh`'s `flask run --port`, and `frontend/vite.config.js`'s
-  dev-proxy target all read this env var (default `8080`). `kea/kea-dhcp4.conf`'s
-  Option 67 boot-file URL and `scripts/ztp-base.py`'s own `DRAWBRIDGE_PORT`
-  constant do not, and can't cleanly: the Kea config is a static file (no
+- **`DRAWBRIDGE_PORT` controls where the app is *reached*, but several other
+  hardcoded port numbers aren't wired to it (the "hardcoded 8080s").**
+  `dev.sh`'s `flask run --port` and `frontend/vite.config.js`'s dev-proxy
+  target read this env var (default `8080`). Outside local dev, though, it
+  only actually controls Gunicorn's own bind when `TLS_DISABLED` is set
+  (`drawbridge/gunicorn.conf.py`) — in normal operation (v0.3.2,
+  `drawbridge-nginx` terminating TLS) Gunicorn always binds a fixed
+  internal-only `127.0.0.1:8078`, and `DRAWBRIDGE_PORT` is just the value
+  every one of the spots below has to be kept in sync with by hand if it
+  ever changes: `container/nginx-drawbridge.conf` (hardcodes its own
+  external `8080`, the plaintext-responder's internal port, and the
+  `127.0.0.1:8078` it proxies to — no templating, same posture as
+  `container/rsyslog-drawbridge.conf` below), `container/rsyslog-drawbridge.conf`
+  (`serverport="8078"` on both its `omhttp` actions), `kea/kea-dhcp4.conf`'s
+  Option 67 boot-file URL, and `scripts/ztp-base.py`'s own `DRAWBRIDGE_PORT`
+  constant. The Kea config and rsyslog/nginx configs are static files (no
   templating layer — see [kea.md](kea.md)), and the ZTP script runs on the
   device itself (IOS XE Guestshell), an entirely separate machine with no
-  access to the server's environment. Changing `DRAWBRIDGE_PORT` from its
-  default therefore means updating both of those by hand too, or devices
-  will phone home to the wrong port. Not worth solving with a templating
-  system for a value that's expected to change rarely, if ever, in a given
-  deployment — but worth flagging clearly at each of the three spots (and
-  here) so it isn't mistaken for a single source of truth.
+  access to the server's environment — none of them can read the env var
+  even in principle. Not worth solving with a templating system for values
+  expected to change rarely, if ever, in a given deployment — but worth
+  flagging clearly at each spot (and here) so none of them is mistaken for
+  a single source of truth. Kea Control Agent's `127.0.0.1:8081` above is
+  the same kind of fixed, internal-only constant, for the same reason.

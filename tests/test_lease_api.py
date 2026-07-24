@@ -237,6 +237,72 @@ def test_provision_complete_failure_keeps_device_logs(client, app, active_sessio
     assert len(remaining) == 1
 
 
+# ProxyFix / X-Forwarded-For correctness (v0-3-2.md) — once behind
+# drawbridge-nginx, every request's direct socket peer is nginx itself, not
+# the real device. Without ProxyFix trusting X-Forwarded-For
+# (drawbridge/main.py), every device would collapse onto the same apparent
+# request.remote_addr, breaking the IP-pinned session model these routes
+# depend on (create_provisioning_session's ip pinning above,
+# provision_complete's session_mismatch check, and
+# queries.find_active_session_by_ip's file-download gate).
+
+def test_provision_request_pins_session_to_x_forwarded_for_ip(client, app, device):
+    response = client.get(
+        f'{BASE}/provision-request', query_string={'serial': device.serial},
+        headers={'X-Forwarded-For': '192.168.100.42'},
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        session = get_session().get(ProvisioningSession, device.serial)
+        assert session.ip == '192.168.100.42'
+
+
+def test_provision_request_distinguishes_devices_behind_the_same_proxy_hop(client, app):
+    """Two different devices, same direct connecting peer (the test
+    client's default REMOTE_ADDR simulates nginx) but different
+    X-Forwarded-For — each must still be pinned to its own real IP, not
+    both collapsing onto nginx's address."""
+    with app.app_context():
+        session = get_session()
+        session.add(Device(serial='DEV-A', added_by='operator'))
+        session.add(Device(serial='DEV-B', added_by='operator'))
+        session.commit()
+
+    client.get(f'{BASE}/provision-request', query_string={'serial': 'DEV-A'}, headers={'X-Forwarded-For': '192.168.100.10'})
+    client.get(f'{BASE}/provision-request', query_string={'serial': 'DEV-B'}, headers={'X-Forwarded-For': '192.168.100.20'})
+
+    with app.app_context():
+        session = get_session()
+        assert session.get(ProvisioningSession, 'DEV-A').ip == '192.168.100.10'
+        assert session.get(ProvisioningSession, 'DEV-B').ip == '192.168.100.20'
+
+
+def test_provision_complete_matches_when_x_forwarded_for_ip_matches_pinned_session(client, app, device):
+    client.get(
+        f'{BASE}/provision-request', query_string={'serial': device.serial},
+        headers={'X-Forwarded-For': '192.168.100.42'},
+    )
+    response = client.put(
+        f'{BASE}/provision-complete', json={'serial': device.serial},
+        headers={'X-Forwarded-For': '192.168.100.42'},
+    )
+    assert response.status_code == 200
+
+
+def test_provision_complete_rejects_when_x_forwarded_for_ip_differs_from_pinned_session(client, app, device):
+    client.get(
+        f'{BASE}/provision-request', query_string={'serial': device.serial},
+        headers={'X-Forwarded-For': '192.168.100.42'},
+    )
+    response = client.put(
+        f'{BASE}/provision-complete', json={'serial': device.serial},
+        headers={'X-Forwarded-For': '192.168.100.99'},
+    )
+    assert response.status_code == 409
+    assert response.get_json()['error'] == 'session_mismatch'
+
+
 # Steady-state concurrency
 
 def _provision_request_worker(database_path, files_path, serial, barrier, result_queue):

@@ -1,15 +1,16 @@
-# Owns the shared network namespace and published ports for all three
+# Owns the shared network namespace and published ports for all four
 # containers in the pod (quadlet/drawbridge.container,
-# quadlet/drawbridge-rsyslog.container, quadlet/drawbridge-bootstrap.container)
-# — Podman 5.0+ required for .pod Quadlet unit support (the Pod= key on
-# .container units, and this file's own generation, both landed in 5.0;
-# older Podman fails with "unsupported key 'Pod' in group 'Container'").
+# quadlet/drawbridge-rsyslog.container, quadlet/drawbridge-bootstrap.container,
+# quadlet/drawbridge-nginx.container) — Podman 5.0+ required for .pod
+# Quadlet unit support (the Pod= key on .container units, and this file's
+# own generation, both landed in 5.0; older Podman fails with "unsupported
+# key 'Pod' in group 'Container'").
 #
-# install.sh installs this automatically alongside the other two unit
-# files (skipped if a unit already exists, so an edited copy is never
+# install.sh installs this automatically alongside the other unit files
+# (skipped if a unit already exists, so an edited copy is never
 # overwritten). To install by hand instead, rootless as the user that will
 # run the containers:
-#   cp quadlet/drawbridge.pod quadlet/drawbridge.container quadlet/drawbridge-rsyslog.container quadlet/drawbridge-bootstrap.container ~/.config/containers/systemd/
+#   cp quadlet/drawbridge.pod quadlet/drawbridge.container quadlet/drawbridge-rsyslog.container quadlet/drawbridge-bootstrap.container quadlet/drawbridge-nginx.container ~/.config/containers/systemd/
 #   # fill in SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) in drawbridge.container
 #   systemctl --user daemon-reload
 #   systemctl --user start drawbridge-pod.service
@@ -26,9 +27,11 @@ Wants=network-online.target
 [Pod]
 PodName=drawbridge
 
-# Gunicorn (in the drawbridge container) binds 0.0.0.0:$DRAWBRIDGE_PORT
-# (8080 by default) and serves both GUI and device-facing (ZTP
-# phone-home/file-serving) traffic over the same HTTPS listener.
+# drawbridge-nginx's TLS-terminating listener (see v0-3-2.md) — not
+# Gunicorn's own bind anymore. Gunicorn moved to an internal-only,
+# unpublished plain-HTTP port (gunicorn.conf.py) that nginx proxies to;
+# nginx is the only thing GUI/API/device traffic actually reaches on
+# :8080 from outside the pod.
 PublishPort=8080:8080
 
 # Device syslog collection (see docs/logging.md), handled by the
@@ -58,7 +61,7 @@ PublishPort=10515:10515/tcp
 PublishPort=8090:8090
 
 # Required for the bind mounts (declared on the member .container units)
-# to be writable. All three images run as fixed UID 1000, but rootless Podman's
+# to be writable. All four images run as fixed UID 1000, but rootless Podman's
 # default user namespace does not map that 1:1 to the host: even when the
 # invoking host user is also UID 1000, the containers see the bind-mounted
 # directory as a different, non-writable owner. keep-id fixes the mapping

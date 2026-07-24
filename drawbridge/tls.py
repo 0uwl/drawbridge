@@ -48,8 +48,12 @@ def ensure_cert(cert_path: str, key_path: str) -> None:
             .not_valid_before(now)
             .not_valid_after(now + datetime.timedelta(days=CERT_VALIDITY_DAYS))
             .add_extension(
-                # rsyslog's omhttp (libcurl) does hostname verification against
-                # https://127.0.0.1:8080 and ignores a bare CN — needs a SAN.
+                # drawbridge-nginx (v0-3-2.md) does hostname verification
+                # of its own against this cert for local/loopback testing
+                # (e.g. curl https://127.0.0.1:8080) and ignores a bare
+                # CN — needs a SAN. rsyslog's omhttp no longer connects
+                # over HTTPS at all (see container/rsyslog-drawbridge.conf),
+                # so this SAN's original justification moved, not away.
                 x509.SubjectAlternativeName([
                     x509.DNSName('localhost'),
                     x509.IPAddress(ipaddress.IPv4Address('127.0.0.1')),

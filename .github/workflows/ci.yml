@@ -35,6 +35,7 @@ jobs:
               - 'Containerfile'
               - 'Containerfile.rsyslog'
               - 'Containerfile.bootstrap'
+              - 'Containerfile.nginx'
               - 'container/**'
               - 'scripts/**'
               - 'kea/**'
@@ -100,6 +101,12 @@ jobs:
         uses: immanuwell/dockerfile-roast@1.4.4
         with:
           files: 'Containerfile.bootstrap'
+          engine: podman
+          preset: production
+      - name: Containerfile.nginx linting
+        uses: immanuwell/dockerfile-roast@1.4.4
+        with:
+          files: 'Containerfile.nginx'
           engine: podman
           preset: production
       - name: Kea config syntax check
@@ -221,9 +228,10 @@ jobs:
           cache-from: type=gha,scope=drawbridge-rsyslog
           cache-to: type=gha,scope=drawbridge-rsyslog,mode=max
       # Sibling image for the ZTP script bootstrap server (see
-      # docs/decisions.md, "HTTPS cert trust on C9200CX"). context stays
-      # repo root: its COPY scripts/ztp-base.py is a root-relative path,
-      # same pattern as the main image's frontend/ COPY.
+      # docs/decisions.md, "HTTPS cert trust on C9200CX"). COPYs nothing
+      # from the repo (scripts/ztp-base.py is bind-mounted at runtime, not
+      # baked in — see Containerfile.bootstrap); context stays repo root
+      # anyway for consistency with the other images built here.
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -233,3 +241,16 @@ jobs:
           tags: ghcr.io/${{ github.repository }}-bootstrap:${{ steps.tag.outputs.tag }}
           cache-from: type=gha,scope=drawbridge-bootstrap
           cache-to: type=gha,scope=drawbridge-bootstrap,mode=max
+      # Sibling image for drawbridge-nginx (TLS termination + friendly
+      # plain-HTTP response — see v0-3-2.md). context stays repo root: its
+      # COPY container/nginx-drawbridge.conf is a root-relative path, same
+      # pattern as Containerfile.rsyslog's own COPY.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile.nginx
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}-nginx:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=drawbridge-nginx
+          cache-to: type=gha,scope=drawbridge-nginx,mode=max

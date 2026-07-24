@@ -1,0 +1,45 @@
+# Pod member — see quadlet/drawbridge.pod for the pod-level settings
+# shared with drawbridge.container/drawbridge-rsyslog.container/
+# drawbridge-bootstrap.container (PublishPort=, UserNS=) and for install/
+# host-prep instructions. See v0-3-2.md for why this container exists
+# (Gunicorn can't itself give a plain-HTTP request against its own HTTPS
+# port anything but a connection reset — there's no way to redirect on a
+# socket already committed to a TLS handshake) and why it's kept separate
+# from drawbridge-bootstrap rather than folded together (ZTP script
+# serving is core/non-optional; this container is meant to be skippable
+# by an operator bringing their own reverse proxy — see docs/deployment.md
+# "TLS").
+
+[Unit]
+Description=Drawbridge TLS-terminating reverse proxy
+
+[Container]
+Image=ghcr.io/0uwl/drawbridge-nginx:latest
+ContainerName=drawbridge-nginx
+Pod=drawbridge.pod
+
+# Read-only, scoped to just the TLS cert/key drawbridge.container
+# generates on first run (drawbridge/tls.py) — this container never
+# touches any other part of Drawbridge's data directory.
+Volume=%h/.local/share/drawbridge/data/tls:/app/data/tls:ro,Z
+
+ReadOnly=true
+# nginx's pid file and proxy/client-body temp buffers all live under
+# /tmp (container/nginx-drawbridge.conf) rather than Alpine's package
+# defaults under /var/lib/nginx — those come pre-owned by the nginx
+# package's own system user, not this image's non-root UID, and that
+# ownership survives onto a tmpfs mount by default (Podman's tmpcopyup).
+# Same pattern drawbridge.container already uses for Gunicorn's own
+# control socket.
+Tmpfs=/tmp
+
+[Service]
+# A brand-new install can have this container start before
+# drawbridge.container has generated the TLS cert for the first time
+# (drawbridge/tls.py's ensure_cert(), no init-container equivalent in a
+# Quadlet pod to sequence that) — tolerant restart is the right fix here,
+# same as other soft pod-startup races in this pod. RestartSec= (not the
+# systemd default, which retries near-instantly) keeps that handful of
+# seconds from flooding the log with rapid failed-start lines.
+Restart=on-failure
+RestartSec=3

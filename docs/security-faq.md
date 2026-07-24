@@ -55,9 +55,9 @@ own IP, then immediately pull the image/config from that same IP — this
 closes the "cold fetch by anyone, no session at all" gap and the
 first-claim-wins race it made worse, but it doesn't close the race itself
 (see [beta.md](../beta.md) §7). The ZTP script itself isn't served through
-this Flask app at all — it's a single fixed file baked into the separate
-`drawbridge-bootstrap` container, served unauthenticated over plain HTTP on
-`:8090` (see [deployment.md](deployment.md) and [decisions.md](decisions.md),
+this Flask app at all — it's a single fixed file, bind-mounted into the
+separate `drawbridge-bootstrap` container, served unauthenticated over
+plain HTTP on `:8090` (see [deployment.md](deployment.md) and [decisions.md](decisions.md),
 "HTTPS cert trust on C9200CX"). That fetch happens via DHCP Option 67 before
 any serial is known, so gating it isn't possible without breaking the boot
 bootstrap itself; this is fine since it carries nothing device- or
@@ -130,13 +130,15 @@ reset/change-password calls — never written to `localStorage` or logged.
 
 ## Is my session cookie safe in transit?
 
-**Yes.** Drawbridge terminates its own TLS by default (self-signed cert,
-always on — see [deployment.md](deployment.md) "TLS"), and
-`SESSION_COOKIE_SECURE`/`SESSION_COOKIE_SAMESITE` are set in
+**Yes.** Drawbridge terminates its own TLS by default via `drawbridge-nginx`
+(self-signed cert, always on — see [deployment.md](deployment.md) "TLS"),
+and `SESSION_COOKIE_SECURE`/`SESSION_COOKIE_SAMESITE` are set in
 `drawbridge/main.py` accordingly, so the browser refuses to send the session
-cookie over plain HTTP. The one exception is `TLS_DISABLED=1`, a local-dev-only
-escape hatch that also relaxes the cookie flag to match — never set in a
-deployed/Quadlet config (see deployment.md).
+cookie over plain HTTP. The one exception is `TLS_DISABLED=1`, which also
+relaxes the cookie flag to match — either local development, or the
+supported bring-your-own-reverse-proxy production mode (see deployment.md),
+where whatever proxy you put in front is responsible for terminating TLS
+instead.
 
 ## Is Drawbridge as secure as Cisco Secure ZTP (RFC 8572)?
 
@@ -163,8 +165,13 @@ application:
 - Port security / 802.1X on switch ports serving the VLAN.
 - DHCP snooping and dynamic ARP inspection.
 - No hubs, unmanaged switches, or mirrored/monitor ports on the segment.
-- A TLS-terminating reverse proxy in front of Drawbridge if it's reachable
-  from anywhere outside that isolated segment.
+- `drawbridge-nginx` already terminates TLS by default (see
+  [deployment.md](deployment.md) "TLS") — if you need a real ACME-issued
+  cert, a WAF, or some other reverse proxy of your own instead, either
+  mount your own cert/key pair for `drawbridge-nginx` to use, or disable
+  it (`TLS_DISABLED=1`) and put your own proxy in front instead. Either
+  way, TLS termination somewhere is not optional if Drawbridge is
+  reachable from anywhere outside the isolated segment.
 - Never upload a config file with real secrets in it unless you've verified
   the above — see the config/image question above.
 

@@ -35,13 +35,14 @@ USER drawbridge
 ENV FLASK_ENV=production
 
 # Informational only — doesn't bind anything itself. Gunicorn's actual bind
-# port follows DRAWBRIDGE_PORT (drawbridge/gunicorn.conf.py, default 8080 to
-# match here); update the port mapping at run time if that's overridden.
-# Device syslog collection (:10514) now lives in the sibling
-# drawbridge-rsyslog container (Containerfile.rsyslog, same pod) — see
-# docs/logging.md.
+# is now an internal-only port, not this one — drawbridge-nginx (sibling
+# image, same pod) terminates TLS on :8080 and proxies to Gunicorn instead
+# (see v0-3-2.md); :8080 here is a legacy default kept for TLS_DISABLED
+# mode (drawbridge/gunicorn.conf.py), where Gunicorn binds it directly.
+# Device syslog collection (:10514) lives in the sibling drawbridge-rsyslog
+# container (Containerfile.rsyslog, same pod) — see docs/logging.md.
 EXPOSE 8080
 
-# /app/data and /app/scripts are mount points (see docs/deployment.md) — do
+# /app/data and /app/files are mount points (see docs/deployment.md) — do
 # not bake content into the image; bind-mount them at runtime.
 ENTRYPOINT ["gunicorn", "drawbridge:create_app()", "-c", "drawbridge/gunicorn.conf.py"]

@@ -1,6 +1,7 @@
 # Pod member — see quadlet/drawbridge.pod for the pod-level settings
-# shared with drawbridge-rsyslog.container (PublishPort=, UserNS=) and for
-# install/host-prep instructions.
+# shared with drawbridge-rsyslog.container/drawbridge-bootstrap.container/
+# drawbridge-nginx.container (PublishPort=, UserNS=) and for install/
+# host-prep instructions.
 #
 # Full description of every variable below: docs/deployment.md
 # ("Environment Variables").
@@ -16,7 +17,7 @@ Pod=drawbridge.pod
 # --- Required ---
 # /app/data holds the SQLite DB (unless DATABASE_PATH below points
 # at Postgres) and the auto-generated TLS cert/key under data/tls/.
-# /app/files holds uploaded images/configs/scripts served to devices.
+# /app/files holds uploaded images/configs served to devices.
 # %h expands to the invoking user's home directory. If this is changed,
 # remember to change the ownership of that directory to the invoking user.
 # :Z relabels for SELinux hosts; harmless if
@@ -32,8 +33,13 @@ Volume=%h/.local/share/drawbridge/files:/app/files:Z
 Environment=SECRET_KEY=CHANGE_ME_use_openssl_rand_hex_32
 
 # --- Optional---
-# Port Gunicorn binds to inside the container. Update the left side of
-# drawbridge.pod's PublishPort= to match if you change this.
+# The port this whole deployment is reached on — what devices/admins
+# actually dial. Only directly controls Gunicorn's own bind when
+# TLS_DISABLED is set below; otherwise Gunicorn always binds a fixed,
+# internal-only port (drawbridge-nginx terminates TLS and proxies to it —
+# see v0-3-2.md), and this value is just what drawbridge-nginx.container's
+# nginx conf and drawbridge.pod's PublishPort= need to agree on by hand if
+# ever changed from the default.
 #Environment=DRAWBRIDGE_PORT=8080
 
 # Gunicorn worker count. Ignored (forced to 1) whenever DATABASE_PATH
@@ -87,18 +93,23 @@ Environment=SECRET_KEY=CHANGE_ME_use_openssl_rand_hex_32
 #LoadCredential=admin_password:/path/to/admin-password-secret
 
 # --- Optional ---
-# Drawbridge terminates its own TLS and self-signs a cert/key at these
-# paths on first run if nothing exists there yet. Both default under
-# /app/data, so they persist via the Volume= above with no extra mount —
-# only override if you want to supply your own cert from elsewhere on the
-# host, or mount it separately. If you do supply your own, also update
-# container/rsyslog-drawbridge.conf's tls.cacert to match — it defaults to
-# assuming the self-signed cert (see docs/logging.md).
+# Drawbridge terminates its own TLS (via drawbridge-nginx, not Gunicorn
+# directly — see v0-3-2.md) and self-signs a cert/key at these paths on
+# first run if nothing exists there yet. Both default under /app/data, so
+# they persist via the Volume= above with no extra mount — only override
+# if you want to supply your own cert from elsewhere on the host, or mount
+# it separately. drawbridge-nginx.container bind-mounts this same
+# directory read-only and reads whatever ends up here, self-signed or not.
 #Environment=TLS_CERT_PATH=/app/data/tls/cert.pem
 #Environment=TLS_KEY_PATH=/app/data/tls/key.pem
 
-# Local-development escape hatch only — skips TLS, serves plain HTTP.
-# NEVER set this in a deployed Quadlet unit.
+# Skips TLS entirely and serves plain HTTP directly on DRAWBRIDGE_PORT —
+# either local development, or a supported production mode for an
+# operator bringing their own reverse proxy instead of drawbridge-nginx
+# (see docs/deployment.md, "TLS"). If you set this for the latter, also
+# `systemctl --user disable --now drawbridge-nginx.service` — it has
+# nothing to terminate TLS for anymore and would otherwise sit there
+# doing nothing useful.
 #Environment=TLS_DISABLED=1
 
 # Matches the Containerfile's runtime expectations (docs/deployment.md,

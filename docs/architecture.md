@@ -45,12 +45,22 @@ Provisioning VLAN
 │  └─────────────────────┘  never calls it            │
 │                                                     │
 │  ┌─────────────────────────────────────────────┐    │
+│  │  drawbridge-nginx container                 │    │
+│  │  image: localhost/drawbridge-nginx:latest   │    │
+│  │                                             │    │
+│  │  TLS termination, port 8080 (published)     │    │
+│  │  A plain-HTTP request against :8080 gets a  │    │
+│  │  clean "use https://" response, not a       │    │
+│  │  connection reset (stream+ssl_preread)      │    │
+│  │  Proxies everything to Gunicorn internally  │    │
+│  └─────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────┐    │
 │  │  Drawbridge container (rootless Podman)     │    │
 │  │  image: localhost/drawbridge:latest         │    │
 │  │                                             │    │
-│  │  Flask app, port 8080 (DRAWBRIDGE_PORT)     │    │
-│  │  Devices phone home here directly           │    │
-│  │  (/api/provision-request)                   │    │
+│  │  Flask app, 127.0.0.1:8078 (internal only)  │    │
+│  │  Devices/admins reach it only via nginx     │    │
+│  │  above (/api/provision-request, GUI, etc.)  │    │
 │  │                                             │    │
 │  │  /app/data     (Database, certs)            │    │
 │  │  /app/files    (images/configs)             │    │
@@ -60,13 +70,18 @@ Provisioning VLAN
 │  │  image: localhost/drawbridge-bootstrap:latest│    │
 │  │                                             │    │
 │  │  busybox httpd, plain HTTP, port 8090       │    │
-│  │  Serves scripts/ztp-base.py (baked in at    │    │
-│  │  build time) — the one fetch that happens   │    │
-│  │  before any script code can validate a cert │    │
+│  │  Serves scripts/ztp-base.py (bind-mounted,  │    │
+│  │  operator-edited) — the one fetch that      │    │
+│  │  happens before any script code can         │    │
+│  │  validate a cert                            │    │
 │  └─────────────────────────────────────────────┘    │
 │                                                     │
 │  Host bind mounts:                                  │
 │    ~/.local/share/drawbridge/data/  -> /app/data/   │
+│    ~/.local/share/drawbridge/data/tls/              │
+│                          -> /app/data/tls/ (nginx)  │
+│    ~/.local/share/drawbridge/files/scripts/         │
+│                          -> /scripts/ (bootstrap)   │
 │    ~/.local/share/drawbridge/files/ -> /app/files/  │
 └─────────────────────────────────────────────────────┘
 ```
@@ -102,7 +117,9 @@ substitute for the script-level gate below.
    is still unconfirmed without lab hardware (see [decisions.md](decisions.md),
    "HTTPS cert trust on C9200CX"). Every *subsequent* device-initiated
    request (phone-home, completion callback) goes back over real HTTPS
-   against Drawbridge's own listener, with server cert verification: on
+   against Drawbridge's own listener (`drawbridge-nginx`, which terminates
+   TLS and proxies to the app — see [deployment.md](deployment.md)), with
+   server cert verification: on
    C9200CX, via an IOS XE trustpoint imported by the script itself before
    its first HTTPS call (Guestshell has no network stack of its own there);
    on other platforms, directly in Python via
@@ -137,6 +154,7 @@ drawbridge/
 ├── Containerfile               <- builds localhost/drawbridge:latest (multi-stage: builds frontend/, then the Flask image)
 ├── Containerfile.rsyslog       <- builds localhost/drawbridge-rsyslog:latest (Alpine + rsyslog, see logging.md)
 ├── Containerfile.bootstrap     <- builds localhost/drawbridge-bootstrap:latest (busybox httpd serving the ZTP script, see deployment.md)
+├── Containerfile.nginx         <- builds localhost/drawbridge-nginx:latest (TLS termination, see deployment.md)
 ├── frontend/                  <- Vue 3 + Vite admin UI, baked into drawbridge/static at build time (see frontend.md)
 │   ├── package.json
 │   ├── vite.config.js
@@ -144,11 +162,12 @@ drawbridge/
 │   └── src/
 │       ├── main.js
 │       └── App.vue
-├── quadlet/                    <- Podman Quadlet units, one pod + three containers (see deployment.md)
+├── quadlet/                    <- Podman Quadlet units, one pod + four containers (see deployment.md)
 │   ├── drawbridge.pod
 │   ├── drawbridge.container
 │   ├── drawbridge-rsyslog.container
-│   └── drawbridge-bootstrap.container
+│   ├── drawbridge-bootstrap.container
+│   └── drawbridge-nginx.container
 ├── kea/
 │   ├── kea-dhcp4.conf         <- Kea DHCPv4 configuration (vanilla — no hook)
 │   └── kea-ctrl-agent.conf    <- Kea Control Agent (REST API, 127.0.0.1:8081; operator diagnostics only)

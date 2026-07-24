@@ -60,7 +60,7 @@ explicitly instead of the syslog default (see the IOS-XE example below).
 
 **Why HTTP (`omhttp`), not a named pipe or a second endpoint**: pod members
 share a network namespace, so `drawbridge-rsyslog` reaches `drawbridge` at
-`https://127.0.0.1:8080` — an ordinary HTTP call, no FIFO, no poller
+`http://127.0.0.1:8078` — an ordinary HTTP call, no FIFO, no poller
 process, no separate DB session to manage. `container/rsyslog-drawbridge.conf`
 POSTs every line straight to the existing `POST /api/v1/device-logs`
 endpoint — one unconditional action, no per-vendor branching in rsyslog
@@ -71,21 +71,12 @@ itself now, which also runs each message through
 session's `state` inline when it matches — no separate
 `/api/v1/device-events` endpoint, no second HTTP round-trip per event.
 
-The `omhttp` action connects with `usehttps="on"` but `allowunsignedcerts="on"`
-(curl's `CURLOPT_SSL_VERIFYPEER=0`) instead of a `tls.cacert` — it skips
-CA-chain validation entirely rather than pointing at Drawbridge's cert, so
-`drawbridge-rsyslog` doesn't need that cert (or any volume mount at all —
-see `quadlet/drawbridge-rsyslog.container`). rsyslog's own docs call
-`allowunsignedcerts` "strongly discouraged... primarily useful only for
-debugging or testing," which holds for a real network path, but doesn't
-apply here: this connection never leaves the pod's shared loopback network
-namespace, so there's no position an attacker could occupy to MITM it.
-Hostname verification stays on regardless (not disabled via
-`skipverifyhost`) — `drawbridge/tls.py`'s self-signed cert includes a SAN
-(`127.0.0.1` + `localhost`) so that check passes against the cert received
-over the connection itself, no local file needed either way (a bare-CN
-cert, which is all older versions generated, fails that check even when
-otherwise trusted).
+**Plain HTTP, not HTTPS**: `127.0.0.1:8078` is Gunicorn's own internal-only
+bind (v0.3.2 — `drawbridge-nginx` terminates TLS for external traffic
+instead, see [deployment.md](deployment.md) "TLS"). There's no cert on
+this hop at all, so nothing for `drawbridge-rsyslog` to skip-verify or
+pin — it never leaves the pod's shared loopback network namespace, so
+there's no position an attacker could occupy to MITM it either way.
 
 No unit test covers the container/rsyslog wiring itself (infra, not logic)
 — see [deployment.md](deployment.md) for the manual smoke test.
@@ -227,8 +218,8 @@ Drawbridge, it doesn't redirect Kea's local logging away.
 `imtcp` input on **`:10515`** to its own ruleset (`kealogs`), kept separate
 from the default ruleset the `:10514` device-syslog input uses. Its
 `omhttp` action POSTs `{"message": "<msg>"}` (no `ip` property — nothing to
-correlate) to `POST /api/v1/kea-logs`, same TLS posture
-(`allowunsignedcerts="on"`, loopback-only connection) as the device-logs
+correlate) to `POST /api/v1/kea-logs`, same plain-HTTP posture (no TLS on
+this loopback-only hop at all — see "Why HTTP" above) as the device-logs
 action. `quadlet/drawbridge.pod` publishes `10515:10515/tcp` alongside the
 existing `10514` ports.
 
