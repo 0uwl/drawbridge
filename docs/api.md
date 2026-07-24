@@ -11,8 +11,8 @@ All `/api/*` paths below are versioned — `API_PREFIX` in `main.py` is
 `/api/v1/devices`. `/files/*` paths are not versioned.
 
 The ZTP script itself is not one of these routes — it's a single fixed
-file baked into the separate `drawbridge-bootstrap` container and served
-over plain HTTP on `:8090`, not through this Flask app at all. See
+file, bind-mounted into the separate `drawbridge-bootstrap` container and
+served over plain HTTP on `:8090`, not through this Flask app at all. See
 [deployment.md](deployment.md) ("Container") and [decisions.md](decisions.md)
 ("HTTPS cert trust on C9200CX").
 

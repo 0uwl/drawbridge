@@ -60,13 +60,16 @@ Provisioning VLAN
 │  │  image: localhost/drawbridge-bootstrap:latest│    │
 │  │                                             │    │
 │  │  busybox httpd, plain HTTP, port 8090       │    │
-│  │  Serves scripts/ztp-base.py (baked in at    │    │
-│  │  build time) — the one fetch that happens   │    │
-│  │  before any script code can validate a cert │    │
+│  │  Serves scripts/ztp-base.py (bind-mounted,  │    │
+│  │  operator-edited) — the one fetch that      │    │
+│  │  happens before any script code can         │    │
+│  │  validate a cert                            │    │
 │  └─────────────────────────────────────────────┘    │
 │                                                     │
 │  Host bind mounts:                                  │
 │    ~/.local/share/drawbridge/data/  -> /app/data/   │
+│    ~/.local/share/drawbridge/files/scripts/         │
+│                          -> /scripts/ (bootstrap)   │
 │    ~/.local/share/drawbridge/files/ -> /app/files/  │
 └─────────────────────────────────────────────────────┘
 ```

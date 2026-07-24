@@ -29,8 +29,9 @@ avoids entirely).
   container's plain-HTTP listener (`http://<host>:8090/ztp-base.py` —
   not Drawbridge's own HTTPS listener; see [deployment.md](deployment.md)
   "Container" and [decisions.md](decisions.md) "HTTPS cert trust on
-  C9200CX" for why). There is exactly one ZTP script, baked into that
-  image at build time — no per-device script selection exists;
+  C9200CX" for why). There is exactly one ZTP script, bind-mounted into
+  that container from the host (edited in place per deployment — see
+  [deployment.md](deployment.md)) — no per-device script selection exists;
   `juniper-devices` has no `option-data` yet — Junos ZTP support is future
   work, explicitly out of scope for alpha — but is already admitted to the
   pool so adding it later is additive (one `option-data` block on that

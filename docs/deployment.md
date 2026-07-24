@@ -96,19 +96,24 @@ privileged port and both images run as non-root UID 1000 throughout (no
 container-layer and rsyslog-config design.
 
 **`Containerfile.bootstrap`** builds `localhost/drawbridge-bootstrap:latest`
-— a separate, single-stage `busybox:musl` image with `scripts/ztp-base.py`
-`COPY`ed in at build time and served over plain, unauthenticated HTTP by
-busybox's built-in `httpd` applet on **:8090**. This exists purely to break
-one chicken-and-egg fetch: DHCP Option 67's `boot-file-name` fetch happens
+— a separate, single-stage `busybox:musl` image serving whatever's
+bind-mounted at `/scripts` over plain, unauthenticated HTTP via busybox's
+built-in `httpd` applet on **:8090**. This exists purely to break one
+chicken-and-egg fetch: DHCP Option 67's `boot-file-name` fetch happens
 before any ZTP script code has run on the device, so there's no way to
 pre-establish trust for a self-signed cert ahead of it — confirmed against
 real C9200CX hardware (see [decisions.md](decisions.md), "HTTPS cert trust
-on C9200CX"). No volume mount — the script is baked into the image and
-versioned with the release, not admin-uploaded (see [decisions.md](decisions.md)
-"Facts-first provisioning is deferred, not rejected" for why per-device
-script selection was removed). Everything the script does after that first
-fetch — phone-home, completion callback, log push, file downloads — still
-goes over HTTPS against the main `drawbridge` container.
+on C9200CX"). Not baked into the image: `scripts/ztp-base.py` has
+deployment-specific constants (`DRAWBRIDGE_HOST`, `DRAWBRIDGE_CA_CERT_PEM`)
+every operator must hand-edit before it's usable against real hardware, so
+`install.sh` seeds it once into `~/.local/share/drawbridge/files/scripts/ztp-base.py`
+on first install (never overwriting an already-edited copy on a re-run) and
+the container bind-mounts that directory read-only — one script, no
+per-device selection (see [decisions.md](decisions.md) "Facts-first
+provisioning is deferred, not rejected" for why that was removed), but
+still editable in place per deployment. Everything the script does after
+that first fetch — phone-home, completion callback, log push, file
+downloads — still goes over HTTPS against the main `drawbridge` container.
 
 **Quadlet**, at `~/.config/containers/systemd/`, run as whichever user
 invokes it — there's no dedicated `drawbridge` system user:
@@ -125,9 +130,9 @@ invokes it — there's no dedicated `drawbridge` system user:
   longer takes `drawbridge` down with it, unlike the old single-container/
   s6 setup.
 - `quadlet/drawbridge-bootstrap.container` — the ZTP script server,
-  `Pod=drawbridge.pod`, no volume mount (the script is baked into the image
-  — see above), `ReadOnly=true`, `Restart=on-failure` independent of the
-  other two containers.
+  `Pod=drawbridge.pod`, read-only bind mount of `files/scripts` (seeded by
+  `install.sh` — see above), `ReadOnly=true`, `Restart=on-failure`
+  independent of the other two containers.
 
 [install.sh](../install.sh) installs all four there automatically for the
 user running the script (run it as yourself, not as root/via `sudo` — it

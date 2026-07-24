@@ -69,16 +69,30 @@ def create_blueprint():
 
             case 'PUT':
                 data = request.get_json(silent=True) or {}
+                image = data.get('image')
+                config_file = data.get('config_file')
+                mac = data.get('mac')
+                description = data.get('description')
                 updated = update_device(
                     session,
                     serial,
-                    mac=data.get('mac'),
-                    description=data.get('description'),
-                    image=data.get('image'),
-                    config_file=data.get('config_file'),
+                    mac=mac,
+                    description=description,
+                    image=image,
+                    config_file=config_file,
                 )
                 session.commit()
-                return success_response(f'{serial} updated', payload=updated.as_dict())
+                message = f'{serial} updated.'
+
+                if image is not None:
+                    message += f' Image = {image}.'
+                if config_file is not None:
+                    message += f' Config = {config_file}.'
+                if mac is not None:
+                    message += f' MAC = {mac}.'
+                if description is not None:
+                    message += f' Description = {description}.'
+                return success_response(message, payload=updated.as_dict() if updated is not None else None)
 
             case 'DELETE':
                 if get_provisioning_session(session, serial) is not None:

@@ -128,6 +128,11 @@ def create_app(config_dict: dict = {}):
     app.register_blueprint(kea_logs.create_blueprint(), url_prefix=API_PREFIX)
     app.logger.debug("Registered Blueprint 'kea_logs.py'")
 
+    # 'scripts' is deliberately not one of these — files.py no longer
+    # manages a 'script' file type at all (see docs/decisions.md), so
+    # files/scripts/ is install.sh's concern now, not this app's: it
+    # creates and seeds that directory directly for drawbridge-bootstrap's
+    # bind mount, entirely outside FILES_PATH's Flask-managed subtree.
     for subdir in ('images', 'configs'):
         os.makedirs(os.path.join(app.config['FILES_PATH'], subdir), exist_ok=True)
 

@@ -153,9 +153,12 @@
   "facts-first" reasoning above still applies to *real* per-device script
   selection: it's Day-0 provisioning logic that needs hardware-tested
   design, not something to bolt onto an unused upload API. `ztp-base.py`
-  is now baked into `Containerfile.bootstrap` at build time instead (see
-  "HTTPS cert trust on C9200CX" below) — one script, versioned with the
-  release, no DB-backed selection at all.
+  is now served via `drawbridge-bootstrap`'s bind mount instead (see
+  "HTTPS cert trust on C9200CX" below) — one script, no DB-backed
+  selection at all, but still editable in place per deployment (it has
+  deployment-specific constants — `DRAWBRIDGE_HOST`, `DRAWBRIDGE_CA_CERT_PEM`
+  — an operator must set), so this isn't a return to a build-time-only
+  artifact the way images/configs were considered and rejected for.
 
 - **C9200CX network stack isolation — `/api/provision-complete` accepts PUT.**
   Python scripts running on the C9200CX are entirely isolated from the device's
