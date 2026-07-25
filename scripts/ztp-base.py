@@ -19,6 +19,10 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
+import sys
+
+import logging
+from logging.handlers import SysLogHandler
 
 import cli # type: ignore
 
@@ -30,6 +34,7 @@ import cli # type: ignore
 # the default. See docs/decisions.md.
 DRAWBRIDGE_HOST = '192.168.100.1'
 DRAWBRIDGE_PORT = 8080
+DRAWBRIDGE_LOG_PORT = 10514
 DRAWBRIDGE_BASE_URL = f'https://{DRAWBRIDGE_HOST}:{DRAWBRIDGE_PORT}/api/v1'
 
 # Must be set to this deployment's actual Drawbridge TLS cert (or its
@@ -58,6 +63,26 @@ PROVISION_REQUEST_FILENAME = 'provision-request.json'
 PROVISION_REQUEST_FLASH_PATH = 'flash:' + PROVISION_REQUEST_FILENAME
 PROVISION_REQUEST_LOCAL_PATH = '/bootflash/' + PROVISION_REQUEST_FILENAME
 
+LOGGER: logging.Logger
+
+class Device:
+    def __init__(self, serial: str, model: str, mac: str, ip: str, version: str):
+        self.serial = serial
+        self.model = model
+        self.mac = mac
+        self.ip = ip
+        self.version = version
+
+    def to_dict(self):
+        return {
+            'mac': self.mac,
+            'ip': self.ip,
+            'model': self.model,
+            'version': self.version,
+            'serial': self.serial,
+        }
+DEVICE: Device
+
 
 def get_serial():
     """Serial via 'show version'. Returns None if the field isn't found."""
@@ -82,6 +107,73 @@ def get_platform():
     return None
 
 
+def _setup_logger(name: str, platform: str, log_file_name: str, level=logging.INFO):
+    # Create logger with the given name
+    new_logger = logging.getLogger(name)
+    new_logger.setLevel(level)
+    new_logger.propagate = False
+
+    # Formatter for log messages
+    formatter = logging.Formatter('%(asctime)s %(name)s: %(levelname)s - %(message)s', datefmt='%b %d %H:%M:%S')
+    stdout_formatter = logging.Formatter('%(asctime)s %(name)s: %(levelname)s - %(message)s', datefmt='%b %d %H:%M:%S')
+
+    # StreamHandler for stdout
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(level)
+
+    # FileHandler for writing to a log file
+    file_handler = logging.FileHandler(f'/bootflash/guest-share/{log_file_name}')
+    file_handler.setLevel(level)
+    file_handler.setFormatter(formatter)
+
+    # SyslogHandler for sending logs to Drawbridge, if platform is not C9200CX
+    syslog_handler = SysLogHandler(address=(DRAWBRIDGE_HOST, DRAWBRIDGE_PORT))
+    syslog_handler.setLevel(level)
+    syslog_handler.setFormatter(formatter)
+
+    # Avoid adding handlers multiple times
+    if not new_logger.handlers:
+        new_logger.addHandler(stdout_handler)
+        new_logger.addHandler(file_handler)
+        if C9200CX_PLATFORM not in platform:
+            new_logger.addHandler(syslog_handler)
+
+    return new_logger
+
+
+def _get_device_info():
+    """
+    Extracts the model number, serial number, ip and software version from Cisco IOS-XE 'show version' output.
+
+    Returns:
+        tuple: (model_number, serial_number, software_version)
+               If a value is not found, None is returned for that field.
+    """
+    show_version = cli.cli('show version')
+    show_interfaces = cli.cli('show interfaces vlan 1')
+    show_ip_on_interface = cli.cli('sh ip int vlan 1')
+
+    model = re.search(r'[Mm]odel [Nn]umber\s*:\s*(C[0-9A-Z\-]+)', show_version)
+    serial = re.search(r'[Ss]ystem [Ss]erial [Nn]umber\s*:\s*([A-Z0-9]+)', show_version)
+    version = re.search(r'[Vv]ersion\s+(\d+\.\d+\.\d+)', show_version)
+    mac = re.search(r'Vlan1[\s\S]+?address is ([0-9a-fA-F.]+)', show_interfaces)
+    ip = re.search(r'Internet address is (\d{1,3}(?:\.\d{1,3}){3})', show_ip_on_interface)
+
+    if mac is not None:
+        # Remove any dots ('.') in the input
+        mac = mac.string.replace('.', '')
+        # Split the MAC address into groups of two characters and join with colons
+        mac = ':'.join([mac[i:i + 2] for i in range(0, len(mac), 2)])
+
+    return (
+        str(model.group(1)) if model else '',
+        str(serial.group(1)) if serial else None,
+        str(version.group(1)) if version else '',
+        str(ip.group(1)) if ip else '',
+        str(mac) if mac else '',
+    )
+
+
 def _ensure_c9200cx_trustpoint():
     """Imports DRAWBRIDGE_CA_CERT_PEM into an IOS XE trustpoint so `copy
     https://...` can validate Drawbridge's certificate instead of blocking
@@ -93,14 +185,28 @@ def _ensure_c9200cx_trustpoint():
     report_status()/log_to_server() call is redundant, one-time setup is
     all `copy https://...` ever needs for the rest of the run.
     """
-    cli.execute(f'crypto pki trustpoint {TRUSTPOINT_NAME}')
+    cli.configure(f'crypto pki trustpoint {TRUSTPOINT_NAME}')
     cli.execute('enrollment terminal')
     cli.execute('revocation-check none')
     cli.execute('exit')
-    cli.execute(f'crypto pki authenticate {TRUSTPOINT_NAME}')
+    cli.configure(f'crypto pki authenticate {TRUSTPOINT_NAME}')
     cli.execute(DRAWBRIDGE_CA_CERT_PEM)
     cli.execute('quit')
     cli.execute('yes')
+
+def _configure_ssl_script():
+    eem_commands = ['event manager applet ssl',
+                    'event none maxrun 30',
+                    'action 1.0 cli command "enable"',
+                    'action 1.0 cli command "configure terminal"',
+                    f'action 1.0 cli command "crypto pki trustpoint {TRUSTPOINT_NAME}"',
+                    'action 1.0 cli command "exit"',
+                    f'action 1.0 cli command "crypto pki authenticate {TRUSTPOINT_NAME}"',
+                    f'action 1.0 cli command "{DRAWBRIDGE_CA_CERT_PEM}"',
+                    'action 1.1 cli command "quit',
+                    'action 1.2 cli command "yes"'
+                    ]
+    cli.configure(eem_commands)
 
 
 def request_provisioning(serial, platform):
@@ -115,7 +221,7 @@ def request_provisioning(serial, platform):
     """
     url = f'{DRAWBRIDGE_BASE_URL}/provision-request?serial={urllib.parse.quote(serial)}'
 
-    if platform == C9200CX_PLATFORM:
+    if C9200CX_PLATFORM in platform:
         # C9200CX's Guestshell has no usable network stack of its own —
         # direct socket calls fail. Fetch via IOS XE's own 'copy' primitive
         # instead (see docs/decisions.md "C9200CX network stack isolation").
@@ -161,7 +267,7 @@ def _put_json(url, payload, platform, filename):
     the HTTP request — see docs/decisions.md. Other real platforms use a
     direct HTTP request instead.
     """
-    if platform == C9200CX_PLATFORM:
+    if C9200CX_PLATFORM in platform:
         with open('/bootflash/' + filename, 'w') as f:
             json.dump(payload, f)
         # IOS XE's 'copy' to an HTTP(S) destination issues a PUT (see decisions.md).
@@ -188,25 +294,32 @@ def log_to_server(serial, message, platform):
 
 
 def main():
-    serial = get_serial()
+    global LOGGER, DEVICE
+
+    model, serial, version, ip, mac = _get_device_info()
+
     if serial is None:
         return
 
-    platform = get_platform()
-    if platform == C9200CX_PLATFORM:
+    DEVICE = Device(serial=serial, model=model, version=version, mac=mac, ip=ip)
+
+    LOGGER = _setup_logger(name=f'{DEVICE.serial}-logger', platform=DEVICE.model, log_file_name=f'{DEVICE.serial}.log')
+
+    if C9200CX_PLATFORM in DEVICE.model:
+        LOGGER.info(f'Platform is {DEVICE.model}. Manually inserting trustpoint name for TLS')
         _ensure_c9200cx_trustpoint()
 
-    log_to_server(serial, 'provisioning started', platform)
+    log_to_server(DEVICE.serial, 'provisioning started', DEVICE.model)
 
-    decision = request_provisioning(serial, platform)
+    decision = request_provisioning(DEVICE.serial, DEVICE.model)
     approved = decision is not None and decision.get('success')
-    log_to_server(serial, 'provision-request: ' + ('approved' if approved else 'denied/unreachable'), platform)
+    log_to_server(DEVICE.serial, 'provision-request: ' + ('approved' if approved else 'denied/unreachable'), DEVICE.model)
     if not approved:
-        return  # denied or unreachable — exit cleanly, no completion callback
+        return  # denied or unreachable - exit cleanly, no completion callback
 
-    payload = build_status_payload(serial)
-    report_status(payload, platform)
-    log_to_server(serial, 'provisioning complete', platform)
+    payload = build_status_payload(DEVICE.serial)
+    report_status(payload, DEVICE.model)
+    log_to_server(DEVICE.serial, 'provisioning complete', DEVICE.model)
 
 
 if __name__ == '__main__':

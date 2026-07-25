@@ -19,10 +19,6 @@ from drawbridge.queries import (
 )
 from drawbridge.utils import error_response, success_response
 
-
-# NOTE: URL prefixes are defined and appended to the following routes when this blueprint is registered in main.py.
-#       They should not be defined here
-
 def create_blueprint():
     bp = Blueprint(name='devices', import_name= __name__)
 
@@ -40,17 +36,21 @@ def create_blueprint():
                 if serial is None:
                     return error_response('Request body is missing required parameter serial', 'missing_parameter', code=422)
                 session = get_session()
+                image = data.get('image')
+                config_file = data.get('config_file')
+                mac = data.get('mac')
+                description = data.get('description')
                 add_device(
                     session,
                     serial=serial,
-                    mac=data.get('mac'),
-                    description=data.get('description'),
-                    image=data.get('image'),
-                    config_file=data.get('config_file'),
+                    mac=mac,
+                    description=description,
+                    image=image,
+                    config_file=config_file,
                     added_by=current_user.username,
                 )
                 session.commit()
-                return success_response(f'{serial} added')
+                return success_response(f"Device '{serial}' added by {current_user.username}. Image={image}. Config={config_file}. MAC={mac}. Description={description}")
             case _:
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
@@ -65,7 +65,7 @@ def create_blueprint():
 
         match (request.method):
             case 'GET':
-                return success_response(f'{serial} delivered', payload=device.as_dict(), level=logging.DEBUG)
+                return success_response(f"Device '{serial}' delivered", payload=device.as_dict(), level=logging.DEBUG)
 
             case 'PUT':
                 data = request.get_json(silent=True) or {}
@@ -82,7 +82,7 @@ def create_blueprint():
                     config_file=config_file,
                 )
                 session.commit()
-                message = f'{serial} updated.'
+                message = f"Device '{serial}' updated."
 
                 if image is not None:
                     message += f' Image = {image}.'
@@ -107,7 +107,7 @@ def create_blueprint():
                 # see docs/database.md, "Log Retention & Data Minimisation".
                 delete_device_logs_by_serial(session, serial)
                 session.commit()
-                return success_response(f'{serial} deleted')
+                return success_response(f"Device '{serial}' deleted by user {current_user.username}")
 
             case _:
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
@@ -129,7 +129,7 @@ def create_blueprint():
 
         match (request.method):
             case 'GET':
-                return success_response(f'Session for {serial}', payload=active.as_dict(), level=logging.DEBUG)
+                return success_response(f'Returned session for {serial}', payload=active.as_dict(), level=logging.DEBUG)
 
             case 'DELETE':
                 # See docs/database.md, "Stale sessions" — cancellation is
@@ -152,7 +152,7 @@ def create_blueprint():
                 )
                 delete_provisioning_session(db_session, serial)
                 db_session.commit()
-                return success_response(f'{serial} session cancelled')
+                return success_response(f'Session for {serial} cancelled by user {current_user.username}')
 
             case _:
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
