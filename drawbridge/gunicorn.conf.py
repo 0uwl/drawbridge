@@ -57,11 +57,11 @@ else:
     _tls_key_path = os.environ.get('TLS_KEY_PATH', _DEFAULT_TLS_KEY_PATH)
     ensure_cert(_tls_cert_path, _tls_key_path)
 
-    # Keeps scripts/ztp-base.py's DRAWBRIDGE_CA_CERT_PEM in sync with
+    # Keeps scripts/ztp_script.py's DRAWBRIDGE_CA_CERT_PEM in sync with
     # whatever cert was just ensured above — see drawbridge/tls.py. Runs
     # every restart (cheap no-op if nothing changed), which also means an
     # operator following docs/deployment.md's "delete cert.pem/key.pem to
     # regenerate" upgrade path gets the ZTP script updated for free too.
     _files_path = os.environ.get('FILES_PATH', _DEFAULT_FILES_PATH)
-    _ztp_script_path = os.path.join(_files_path, 'scripts', 'ztp-base.py')
+    _ztp_script_path = os.path.join(_files_path, 'scripts', 'ztp_script.py')
     sync_ztp_script_ca_cert(_tls_cert_path, _ztp_script_path)

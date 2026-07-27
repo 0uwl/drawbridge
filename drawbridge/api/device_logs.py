@@ -33,7 +33,7 @@ def create_blueprint():
     @bp.post('/device-logs')
     def post_device_log():
         """Two callers, two body shapes. The ZTP script's log_to_server()
-        (see scripts/ztp-base.py) sends {serial, message} — source is
+        (see scripts/ztp_script.py) sends {serial, message} — source is
         stamped 'script', and the serial must resolve to a known Device or
         ProvisioningSession. rsyslog's omhttp action sends {ip, message} —
         source is stamped 'syslog', and the IP is best-effort correlated to

@@ -1,6 +1,6 @@
 """Contract tests for tests/ztp_mock.py — the requests-based simulation of
-scripts/ztp-base.py's phone-home/completion/log-push flow, standing in for
-mocking scripts/ztp-base.py's own cli-dependent transport when testing the
+scripts/ztp_script.py's phone-home/completion/log-push flow, standing in for
+mocking scripts/ztp_script.py's own cli-dependent transport when testing the
 general request/response contract. See tests/test_ztp_base.py for the
 Cisco-specific trustpoint/cli behavior that this file deliberately doesn't
 cover — ztp_mock.py has no cli/C9200CX machinery to test.

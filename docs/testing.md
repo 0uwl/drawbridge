@@ -40,7 +40,7 @@ and are not part of `pytest`.
 frontend behavior that only shows up in a real browser (e.g. whether a
 failed login actually renders an error message) — see its README.
 
-`scripts/ztp-base.py` assumes it only ever runs on a real IOS XE device
+`scripts/ztp_script.py` assumes it only ever runs on a real IOS XE device
 (`cli` is a hard import, no local-testing fallback). `tests/test_ztp_base.py`
 still exercises its actual logic (trustpoint setup happens exactly once
 per run, C9200CX vs. other-platform transport dispatch) by faking

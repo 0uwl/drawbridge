@@ -1,4 +1,4 @@
-# Serves scripts/ztp-base.py over plain, unauthenticated HTTP for the one
+# Serves scripts/ztp_script.py over plain, unauthenticated HTTP for the one
 # fetch that structurally can't use TLS: DHCP Option 67's boot-file-name
 # fetch happens before any ZTP script code has run, so there's no way to
 # pre-establish trust for a self-signed cert ahead of it — confirmed
@@ -17,7 +17,7 @@
 # container's job into one of the optional ones would mean turning off an
 # optional feature silently breaks a required one. See v0-3-2.md.
 #
-# Not COPYed into the image: scripts/ztp-base.py has deployment-specific
+# Not COPYed into the image: scripts/ztp_script.py has deployment-specific
 # constants (DRAWBRIDGE_HOST, DRAWBRIDGE_CA_CERT_PEM) every operator must
 # hand-edit before the script is usable against real hardware — baking a
 # copy into the image would mean rebuilding/republishing a custom image

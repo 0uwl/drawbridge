@@ -129,7 +129,7 @@ separate system with its own PostgreSQL instance either way.
   been compiled with support for host database type: postgresql` — a
   misleading message; it's a missing hooks-library, not a compile-time
   issue).
-- Fix the stale Option 67 path (`/scripts/ztp-base.py` doesn't match the
+- Fix the stale Option 67 path (`/scripts/ztp_script.py` doesn't match the
   real `/files/scripts/<filename>` route) and use plain `http://`, not
   `https://` (no TLS termination exists in front of Drawbridge yet).
 - `tests/kea-integration/`: `Containerfile.kea` (multi-stage — builder

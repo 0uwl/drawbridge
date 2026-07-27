@@ -3,7 +3,7 @@
 `tests/test_kea_config.py` covers everything about `kea/*.conf` that's
 testable without a running Kea process: JSON validity, and the naming/host/
 port contract between `kea-dhcp4.conf`'s `boot-file-name` option and
-`scripts/ztp-base.py` / the app's serving port. That test runs in the
+`scripts/ztp_script.py` / the app's serving port. That test runs in the
 default `pytest` suite.
 
 What it *can't* catch: whether Kea itself accepts the config as

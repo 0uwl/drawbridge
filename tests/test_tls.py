@@ -84,7 +84,7 @@ def test_sync_ztp_script_ca_cert_is_a_noop_when_script_missing(tmp_path):
     cert_path = tmp_path / 'cert.pem'
     ensure_cert(str(cert_path), str(tmp_path / 'key.pem'))
 
-    script_path = tmp_path / 'ztp-base.py'  # never created
+    script_path = tmp_path / 'ztp_script.py'  # never created
 
     sync_ztp_script_ca_cert(str(cert_path), str(script_path))
 
@@ -93,11 +93,11 @@ def test_sync_ztp_script_ca_cert_is_a_noop_when_script_missing(tmp_path):
 
 def test_sync_ztp_script_ca_cert_is_a_noop_when_markers_missing(tmp_path):
     # An operator who removed the markers has opted out of the auto-sync -
-    # see the comment in scripts/ztp-base.py.
+    # see the comment in scripts/ztp_script.py.
     cert_path = tmp_path / 'cert.pem'
     ensure_cert(str(cert_path), str(tmp_path / 'key.pem'))
 
-    script_path = tmp_path / 'ztp-base.py'
+    script_path = tmp_path / 'ztp_script.py'
     unmarked = "DRAWBRIDGE_CA_CERT_PEM = None\n"
     script_path.write_text(unmarked)
 
@@ -110,7 +110,7 @@ def test_sync_ztp_script_ca_cert_replaces_only_the_marked_block(tmp_path):
     cert_path = tmp_path / 'cert.pem'
     ensure_cert(str(cert_path), str(tmp_path / 'key.pem'))
 
-    script_path = tmp_path / 'ztp-base.py'
+    script_path = tmp_path / 'ztp_script.py'
     script_path.write_text(_SCRIPT_TEMPLATE)
 
     sync_ztp_script_ca_cert(str(cert_path), str(script_path))
@@ -129,7 +129,7 @@ def test_sync_ztp_script_ca_cert_is_idempotent(tmp_path):
     cert_path = tmp_path / 'cert.pem'
     ensure_cert(str(cert_path), str(tmp_path / 'key.pem'))
 
-    script_path = tmp_path / 'ztp-base.py'
+    script_path = tmp_path / 'ztp_script.py'
     script_path.write_text(_SCRIPT_TEMPLATE)
 
     sync_ztp_script_ca_cert(str(cert_path), str(script_path))
@@ -148,7 +148,7 @@ def test_sync_ztp_script_ca_cert_picks_up_a_regenerated_cert(tmp_path):
     key_path = tmp_path / 'key.pem'
     ensure_cert(str(cert_path), str(key_path))
 
-    script_path = tmp_path / 'ztp-base.py'
+    script_path = tmp_path / 'ztp_script.py'
     script_path.write_text(_SCRIPT_TEMPLATE)
     sync_ztp_script_ca_cert(str(cert_path), str(script_path))
     first_cert_pem = cert_path.read_text()
@@ -168,10 +168,10 @@ def test_sync_ztp_script_ca_cert_picks_up_a_regenerated_cert(tmp_path):
 
 def test_sync_ztp_script_ca_cert_matches_the_real_ztp_base_py(tmp_path):
     # Regression: confirms the markers/format this function expects
-    # actually match what's checked into scripts/ztp-base.py, not just the
+    # actually match what's checked into scripts/ztp_script.py, not just the
     # synthetic fixture used above.
-    real_script = Path(__file__).parent.parent / 'scripts' / 'ztp-base.py'
-    script_path = tmp_path / 'ztp-base.py'
+    real_script = Path(__file__).parent.parent / 'scripts' / 'ztp_script.py'
+    script_path = tmp_path / 'ztp_script.py'
     shutil.copy(real_script, script_path)
 
     cert_path = tmp_path / 'cert.pem'

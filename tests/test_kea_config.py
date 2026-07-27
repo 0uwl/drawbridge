@@ -51,17 +51,17 @@ def test_kea_ctrl_agent_conf_is_valid_json():
 def test_boot_file_name_basename_matches_ztp_script(cisco_class):
     boot_file = next(o for o in cisco_class['option-data'] if o['name'] == 'boot-file-name')
     url_path = urlparse(boot_file['data']).path
-    assert Path(url_path).name == 'ztp-base.py'
-    assert (SCRIPTS_DIR / 'ztp-base.py').is_file()
+    assert Path(url_path).name == 'ztp_script.py'
+    assert (SCRIPTS_DIR / 'ztp_script.py').is_file()
 
 
 def test_boot_file_name_path_matches_bootstrap_server(cisco_class):
-    # drawbridge-bootstrap (Containerfile.bootstrap) serves ztp-base.py at
+    # drawbridge-bootstrap (Containerfile.bootstrap) serves ztp_script.py at
     # its URL root ("httpd ... -h /scripts"), not under /files/scripts/ —
     # that Flask route no longer exists (see docs/decisions.md).
     boot_file = next(o for o in cisco_class['option-data'] if o['name'] == 'boot-file-name')
     url_path = urlparse(boot_file['data']).path
-    assert url_path == '/ztp-base.py'
+    assert url_path == '/ztp_script.py'
 
 
 def test_boot_file_name_uses_plain_http(cisco_class):

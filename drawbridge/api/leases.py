@@ -17,7 +17,7 @@ def create_blueprint():
     @bp.get('/provision-request')
     def provision_request():
         """Called by the ZTP script's phone-home step on boot (see
-        scripts/ztp-base.py) — a plain GET with query-string params, since
+        scripts/ztp_script.py) — a plain GET with query-string params, since
         IOS XE's `copy` primitive (the only network I/O available from
         Guestshell, see docs/decisions.md) can't attach a request body.
         Open route, no auth decorator — same posture as /provision-complete
@@ -79,7 +79,7 @@ def create_blueprint():
         # Falls back to the session's assigned image/config_file (set at
         # approval time from the Device row — see provision_request above)
         # when the device doesn't explicitly report its own. The alpha
-        # scripts/ztp-base.py stub never does, so without this the log
+        # scripts/ztp_script.py stub never does, so without this the log
         # would show blank image/config for every real completion despite
         # the assignment being known.
         image = data.get('image')

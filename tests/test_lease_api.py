@@ -147,7 +147,7 @@ def test_provision_complete_known_active_session_returns_200(client, app, active
 
 
 def test_provision_complete_falls_back_to_session_image_and_config_when_not_reported(client, app, active_session):
-    # scripts/ztp-base.py's alpha stub never reports image/config_file in
+    # scripts/ztp_script.py's alpha stub never reports image/config_file in
     # its completion payload — without the session fallback, the log (and
     # therefore the Devices UI's "Provisioning" badge) would show blank
     # image/config for every real-world completion despite the assignment

@@ -24,7 +24,7 @@ import sys
 import logging
 from logging.handlers import SysLogHandler
 
-from cli import configure, execute, cli # type: ignore
+import cli # type: ignore
 
 # Must match the host/port devices reach Drawbridge on (see Option 67 in
 # kea/kea-dhcp4.conf). This script runs on the device (IOS XE Guestshell),
@@ -151,9 +151,9 @@ def _get_device_info():
         tuple: (model_number, serial_number, software_version)
                If a value is not found, None is returned for that field.
     """
-    show_version = cli('show version')
-    show_interfaces = cli('show interfaces vlan 1')
-    show_ip_on_interface = cli('sh ip int vlan 1')
+    show_version = cli.cli('show version')
+    show_interfaces = cli.cli('show interfaces vlan 1')
+    show_ip_on_interface = cli.cli('sh ip int vlan 1')
 
     model = re.search(r'[Mm]odel [Nn]umber\s*:\s*(C[0-9A-Z\-]+)', show_version)
     serial = re.search(r'[Ss]ystem [Ss]erial [Nn]umber\s*:\s*([A-Z0-9]+)', show_version)
@@ -187,14 +187,14 @@ def _ensure_c9200cx_trustpoint():
     report_status()/log_to_server() call is redundant, one-time setup is
     all `copy https://...` ever needs for the rest of the run.
     """
-    configure(f'crypto pki trustpoint {TRUSTPOINT_NAME}')
-    execute('enrollment terminal')
-    execute('revocation-check none')
-    execute('exit')
-    configure(f'crypto pki authenticate {TRUSTPOINT_NAME}')
-    cli(DRAWBRIDGE_CA_CERT_PEM)
-    execute('quit')
-    execute('yes')
+    cli.configure(f'crypto pki trustpoint {TRUSTPOINT_NAME}')
+    cli.execute('enrollment terminal')
+    cli.execute('revocation-check none')
+    cli.execute('exit')
+    cli.configure(f'crypto pki authenticate {TRUSTPOINT_NAME}')
+    cli.cli(DRAWBRIDGE_CA_CERT_PEM)
+    cli.execute('quit')
+    cli.execute('yes')
 
 
 def _configure_ssl_script():
@@ -209,7 +209,7 @@ def _configure_ssl_script():
                     'action 1.6 cli command "quit',
                     'action 1.7 cli command "yes"'
                     ]
-    configure(eem_commands)
+    cli.configure(eem_commands)
 
 
 def request_provisioning():
@@ -257,7 +257,7 @@ def build_status_payload():
         'event': 'provision_complete',
         'image': None,
         'config_file': None,
-        'detail': 'ztp-base.py stub — contract test only, no provisioning performed',
+        'detail': 'ztp_script.py stub — contract test only, no provisioning performed',
     }
 
 
@@ -275,7 +275,7 @@ def _put_json(url, payload, filename):
         with open('/bootflash/' + filename, 'w') as f:
             json.dump(payload, f)
         # IOS XE's 'copy' to an HTTP(S) destination issues a PUT (see decisions.md).
-        execute(f'copy flash:{filename} {url}')
+        cli.execute(f'copy flash:{filename} {url}')
         return
 
     context = ssl.create_default_context(cadata=DRAWBRIDGE_CA_CERT_PEM)

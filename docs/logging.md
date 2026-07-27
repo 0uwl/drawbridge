@@ -155,7 +155,7 @@ is just "forward every line as JSON," genuinely vendor-agnostic.
 
 ## Device script
 
-`scripts/ztp-base.py`'s `log_to_server(serial, message, platform)` shares
+`scripts/ztp_script.py`'s `log_to_server(serial, message, platform)` shares
 `report_status`'s PUT-JSON transport (`_put_json`, the same two-way
 C9200CX/other-platform dispatch documented in
 [decisions.md](decisions.md) — no local-testing branch anymore, this

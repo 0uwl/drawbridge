@@ -16,11 +16,11 @@ ContainerName=drawbridge-bootstrap
 Pod=drawbridge.pod
 
 # Read-only, and scoped to just files/scripts — not the whole files/ tree
-# drawbridge.container mounts at /app/files. scripts/ztp-base.py has
+# drawbridge.container mounts at /app/files. scripts/ztp_script.py has
 # deployment-specific constants (DRAWBRIDGE_HOST, DRAWBRIDGE_CA_CERT_PEM)
 # every operator must hand-edit, so it's bind-mounted rather than baked
 # into the image — see Containerfile.bootstrap. install.sh creates this
-# directory and seeds it with the repo's ztp-base.py on first install
+# directory and seeds it with the repo's ztp_script.py on first install
 # (before the pod ever starts), so there's no ownership race between this
 # container and drawbridge.container over who creates it first.
 Volume=%h/.local/share/drawbridge/files/scripts:/scripts:ro,Z

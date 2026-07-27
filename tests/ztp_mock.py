@@ -1,7 +1,7 @@
 """Requests-based mock ZTP client.
 
 Simulates the same phone-home / completion-callback / log-push contract
-scripts/ztp-base.py implements against a real Drawbridge instance, without
+scripts/ztp_script.py implements against a real Drawbridge instance, without
 any Cisco IOS XE `cli` dependency — that module now assumes it always runs
 inside real Guestshell (see its own docstring), so it can no longer double
 as a local testing tool. This file exists purely to exercise the same
@@ -23,14 +23,14 @@ DRAWBRIDGE_PORT = 8080
 DRAWBRIDGE_BASE_URL = f'https://{DRAWBRIDGE_HOST}:{DRAWBRIDGE_PORT}/api/v1'
 
 # Drawbridge's default cert is self-signed (see drawbridge/tls.py) — False
-# mirrors scripts/ztp-base.py's cadata-pinned trust without needing to
+# mirrors scripts/ztp_script.py's cadata-pinned trust without needing to
 # plumb the actual cert PEM through here too. Never used against a real
 # device; only ever points at a local/dev Drawbridge instance.
 VERIFY = False
 
 
 def request_provisioning(serial, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
-    """Mirrors scripts/ztp-base.py's request_provisioning() for non-C9200CX
+    """Mirrors scripts/ztp_script.py's request_provisioning() for non-C9200CX
     platforms: a GET with the serial as a query param, returning the parsed
     decision dict or None if denied/unreachable."""
     response = requests.get(
@@ -52,19 +52,19 @@ def build_status_payload(serial):
 
 
 def report_status(payload, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
-    """Mirrors scripts/ztp-base.py's report_status()."""
+    """Mirrors scripts/ztp_script.py's report_status()."""
     requests.put(f'{base_url}/provision-complete', json=payload, verify=verify, timeout=10)
 
 
 def log_to_server(serial, message, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
-    """Mirrors scripts/ztp-base.py's log_to_server()."""
+    """Mirrors scripts/ztp_script.py's log_to_server()."""
     requests.put(
         f'{base_url}/device-logs', json={'serial': serial, 'message': message}, verify=verify, timeout=10,
     )
 
 
 def main(serial, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
-    """Mirrors scripts/ztp-base.py's main() — same call sequence and
+    """Mirrors scripts/ztp_script.py's main() — same call sequence and
     log-message contract, non-C9200CX path only (no trustpoint/copy
     machinery to simulate here, see the module docstring)."""
     log_to_server(serial, 'provisioning started', base_url, verify)

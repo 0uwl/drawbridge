@@ -229,7 +229,7 @@ jobs:
           cache-to: type=gha,scope=drawbridge-rsyslog,mode=max
       # Sibling image for the ZTP script bootstrap server (see
       # docs/decisions.md, "HTTPS cert trust on C9200CX"). COPYs nothing
-      # from the repo (scripts/ztp-base.py is bind-mounted at runtime, not
+      # from the repo (scripts/ztp_script.py is bind-mounted at runtime, not
       # baked in — see Containerfile.bootstrap); context stays repo root
       # anyway for consistency with the other images built here.
       - uses: docker/build-push-action@v6

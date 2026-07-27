@@ -105,10 +105,10 @@ chicken-and-egg fetch: DHCP Option 67's `boot-file-name` fetch happens
 before any ZTP script code has run on the device, so there's no way to
 pre-establish trust for a self-signed cert ahead of it — confirmed against
 real C9200CX hardware (see [decisions.md](decisions.md), "HTTPS cert trust
-on C9200CX"). Not baked into the image: `scripts/ztp-base.py` has
+on C9200CX"). Not baked into the image: `scripts/ztp_script.py` has
 deployment-specific constants (`DRAWBRIDGE_HOST`, `DRAWBRIDGE_CA_CERT_PEM`)
 every operator must get right before it's usable against real hardware, so
-`install.sh` seeds it once into `~/.local/share/drawbridge/files/scripts/ztp-base.py`
+`install.sh` seeds it once into `~/.local/share/drawbridge/files/scripts/ztp_script.py`
 on first install (never overwriting an already-edited copy on a re-run) and
 the container bind-mounts that directory read-only. `install.sh` sets
 `DRAWBRIDGE_HOST` for you automatically, best-effort, from the IPv4 address
@@ -180,7 +180,7 @@ folder under that user's own XDG data dir, not a root-owned path like `/srv`,
 so no `sudo`/`chown` is needed.
 
 `install.sh` creates `~/.local/share/drawbridge/{data,files}` itself (and
-seeds `files/scripts/ztp-base.py` — see "Container" above) — nothing to
+seeds `files/scripts/ztp_script.py` — see "Container" above) — nothing to
 create by hand there. Installing the Quadlet units manually instead of via
 `install.sh` skips that step, so create them yourself first in that case:
 ```bash
@@ -253,12 +253,12 @@ otherwise trusted. **Upgrading from a pre-pod install:** delete
 them with the SAN on next start; an existing no-SAN cert is not replaced
 automatically.
 
-**`scripts/ztp-base.py`'s `DRAWBRIDGE_CA_CERT_PEM` is kept in sync
+**`scripts/ztp_script.py`'s `DRAWBRIDGE_CA_CERT_PEM` is kept in sync
 automatically** — `drawbridge/tls.py`'s `sync_ztp_script_ca_cert()` runs
 right after `ensure_cert()` on every `drawbridge` container start (cheap
 no-op if nothing changed) and rewrites just the block between the
 `# --- DRAWBRIDGE_CA_CERT_PEM:BEGIN/END ---` markers in the bind-mounted
-ZTP script (`~/.local/share/drawbridge/files/scripts/ztp-base.py`, the
+ZTP script (`~/.local/share/drawbridge/files/scripts/ztp_script.py`, the
 same file `install.sh` seeds — see "Container" above) with whatever cert
 is actually at `TLS_CERT_PATH`. This also means the "delete
 `cert.pem`/`key.pem` to regenerate" step just above updates the ZTP script
@@ -281,7 +281,7 @@ whichever listener is actually reachable on `DRAWBRIDGE_PORT` — Option
 
 **Device-side cert trust needs a matching CA cert mounted/embedded on the
 device side too**, since a self-signed server cert isn't trusted by anything
-out of the box. `scripts/ztp-base.py`'s `DRAWBRIDGE_CA_CERT_PEM` constant
+out of the box. `scripts/ztp_script.py`'s `DRAWBRIDGE_CA_CERT_PEM` constant
 (hand-maintained, same posture as `DRAWBRIDGE_HOST`) must be set to
 Drawbridge's actual cert (or its issuing CA) before the script is used
 against real hardware — see [decisions.md](decisions.md) for how this gets
@@ -481,7 +481,7 @@ podman manifest push drawbridge-manifest <registry>/drawbridge:latest
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DRAWBRIDGE_PORT` | `8080` | The port this deployment is reached on. Only directly controls Gunicorn's own bind when `TLS_DISABLED` is set (see "TLS" above); otherwise Gunicorn always binds a fixed internal-only port and this is just the value `drawbridge-nginx`'s conf and `drawbridge.pod`'s `PublishPort=` need to agree on by hand if changed. Also the port `flask run --port`/`dev.sh` use in local dev — `frontend/vite.config.js`'s dev-server proxy reads the same variable so it targets the right backend port automatically. **Not** read by `kea/kea-dhcp4.conf`'s Option 67 URL or `scripts/ztp-base.py`'s own `DRAWBRIDGE_PORT` constant — those are static/device-side and must be updated by hand if this changes from its default (see [decisions.md](decisions.md)) |
+| `DRAWBRIDGE_PORT` | `8080` | The port this deployment is reached on. Only directly controls Gunicorn's own bind when `TLS_DISABLED` is set (see "TLS" above); otherwise Gunicorn always binds a fixed internal-only port and this is just the value `drawbridge-nginx`'s conf and `drawbridge.pod`'s `PublishPort=` need to agree on by hand if changed. Also the port `flask run --port`/`dev.sh` use in local dev — `frontend/vite.config.js`'s dev-server proxy reads the same variable so it targets the right backend port automatically. **Not** read by `kea/kea-dhcp4.conf`'s Option 67 URL or `scripts/ztp_script.py`'s own `DRAWBRIDGE_PORT` constant — those are static/device-side and must be updated by hand if this changes from its default (see [decisions.md](decisions.md)) |
 | `DATABASE_PATH` | `/app/data/drawbridge.db` | SQLite database file path, or a full SQLAlchemy URL (e.g. `postgresql+psycopg://user:pass@host/dbname`) to use PostgreSQL instead — see [database.md](database.md) |
 | `WORKERS` | `4` | Number of Gunicorn worker processes. Ignored (forced to `1`) when `DATABASE_PATH` resolves to SQLite — see [database.md](database.md) |
 | `FILES_PATH` | `/app/files` | Root directory for managed files. Subdirectories `images/` and `configs/` are created automatically on startup and should each be bind-mounted to the host if granular control is needed. The ZTP script itself is not managed here — see "Container" above, `drawbridge-bootstrap` |

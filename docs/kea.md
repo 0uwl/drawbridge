@@ -26,7 +26,7 @@ avoids entirely).
   boot mechanisms, so a single global `option-data` block can't serve both.
   Kea's per-class `option-data` is the mechanism: `cisco-devices` carries
   Option 67 (`boot-file-name`) pointing at the `drawbridge-bootstrap`
-  container's plain-HTTP listener (`http://<host>:8090/ztp-base.py` —
+  container's plain-HTTP listener (`http://<host>:8090/ztp_script.py` —
   not Drawbridge's own HTTPS listener; see [deployment.md](deployment.md)
   "Container" and [decisions.md](decisions.md) "HTTPS cert trust on
   C9200CX" for why). There is exactly one ZTP script, bind-mounted into

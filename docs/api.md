@@ -79,7 +79,7 @@ same as the other GET/list routes above.
 
 ## `/api/v1/provision-request` contract
 
-Called by the ZTP script (`scripts/ztp-base.py`) as its first action after
+Called by the ZTP script (`scripts/ztp_script.py`) as its first action after
 fetching the script — a plain `GET` with query-string params, not a JSON
 POST body, since IOS XE's `copy` primitive (the only network I/O available
 from Guestshell — see [decisions.md](decisions.md), "C9200CX network stack

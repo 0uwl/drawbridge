@@ -70,7 +70,7 @@ Provisioning VLAN
 │  │  image: localhost/drawbridge-bootstrap:latest│    │
 │  │                                             │    │
 │  │  busybox httpd, plain HTTP, port 8090       │    │
-│  │  Serves scripts/ztp-base.py (bind-mounted,  │    │
+│  │  Serves scripts/ztp_script.py (bind-mounted,  │    │
 │  │  operator-edited) — the one fetch that      │    │
 │  │  happens before any script code can         │    │
 │  │  validate a cert                            │    │
@@ -188,7 +188,7 @@ drawbridge/
 │   │                             SP integration (see authentication.md)
 │   └── static/                <- built frontend output (generated, gitignored — see frontend.md)
 ├── scripts/
-│   └── ztp-base.py            <- Base ZTP script served to IOS XE devices
+│   └── ztp_script.py            <- Base ZTP script served to IOS XE devices
 ├── tests/
 │   ├── conftest.py
 │   ├── test_lease_api.py

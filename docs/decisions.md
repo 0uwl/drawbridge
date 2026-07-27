@@ -21,7 +21,7 @@
   mechanisms — so `kea/kea-dhcp4.conf` uses Kea's native client
   classification to give each vendor its own `option-data` rather than one
   global block that can't serve both. Only `cisco-devices` has real options
-  for alpha (`scripts/ztp-base.py`); `juniper-devices` is admitted to the
+  for alpha (`scripts/ztp_script.py`); `juniper-devices` is admitted to the
   pool already so Junos ZTP support is additive later, but isn't built —
   out of scope for alpha. This is unrelated to the actual security gate
   (the script's phone-home call): Option 60 is client-supplied and
@@ -132,7 +132,7 @@
   the appropriate provisioning script to hand off to, rather than one static
   script for all devices. This is a reasonable pattern for heterogeneous
   fleets, but it's real Day-0 provisioning logic — the same category the
-  alpha `ztp-base.py` stub deliberately excludes (see alpha.md step 5) — and
+  alpha `ztp_script.py` stub deliberately excludes (see alpha.md step 5) — and
   it requires schema/API additions alpha doesn't have: a version/platform
   field on `Device`, and a new endpoint (or facts parameter) for the
   fetch-then-select round trip, plus a second HTTPS/cert-validation hop.
@@ -144,15 +144,15 @@
   a `default_script` setting, and a full `/files/scripts/*` upload API let
   an operator pick a different ZTP script per device, but Kea's Option 67
   `boot-file-name` has always hardcoded the delivered filename to
-  `ztp-base.py`, and the script itself never read a "next script" field
+  `ztp_script.py`, and the script itself never read a "next script" field
   back from `/api/provision-request` to chain-fetch anything else. No
   matter what an admin uploaded under a different name, devices only ever
-  fetched whatever was literally named `ztp-base.py` — the whole
+  fetched whatever was literally named `ztp_script.py` — the whole
   selection layer was dead weight, not a working feature being cut for
   scope. Removed outright rather than wired up, since the same
   "facts-first" reasoning above still applies to *real* per-device script
   selection: it's Day-0 provisioning logic that needs hardware-tested
-  design, not something to bolt onto an unused upload API. `ztp-base.py`
+  design, not something to bolt onto an unused upload API. `ztp_script.py`
   is now served via `drawbridge-bootstrap`'s bind mount instead (see
   "HTTPS cert trust on C9200CX" below) — one script, no DB-backed
   selection at all, but still editable in place per deployment (it has
@@ -178,7 +178,7 @@
   HTTPS client does not silently accept an unverifiable certificate: without
   a pre-authenticated trustpoint, `copy https://...` either blocks on an
   interactive accept/reject prompt (nothing to answer it — Guestshell's
-  `cli.execute()` isn't a TTY) or fails outright. `scripts/ztp-base.py`
+  `cli.execute()` isn't a TTY) or fails outright. `scripts/ztp_script.py`
   therefore imports `DRAWBRIDGE_CA_CERT_PEM` into a trustpoint via
   `crypto pki authenticate` (`_ensure_c9200cx_trustpoint()`) before its first
   `copy https://` call. A self-signed cert is a valid trust anchor on its
@@ -287,7 +287,7 @@
   `127.0.0.1:8078` it proxies to — no templating, same posture as
   `container/rsyslog-drawbridge.conf` below), `container/rsyslog-drawbridge.conf`
   (`serverport="8078"` on both its `omhttp` actions), `kea/kea-dhcp4.conf`'s
-  Option 67 boot-file URL, and `scripts/ztp-base.py`'s own `DRAWBRIDGE_PORT`
+  Option 67 boot-file URL, and `scripts/ztp_script.py`'s own `DRAWBRIDGE_PORT`
   constant. The Kea config and rsyslog/nginx configs are static files (no
   templating layer — see [kea.md](kea.md)), and the ZTP script runs on the
   device itself (IOS XE Guestshell), an entirely separate machine with no

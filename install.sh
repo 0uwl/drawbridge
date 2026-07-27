@@ -65,7 +65,7 @@ script_source="${BASH_SOURCE[0]:-}"
 if [ -n "$script_source" ] && script_dir="$(cd "$(dirname "$script_source")" >/dev/null 2>&1 && pwd)" && [ -f "$script_dir/kea/kea-dhcp4.conf" ]; then
     kea_conf_dir="$script_dir/kea"
     quadlet_src_dir="$script_dir/quadlet"
-    ztp_script_src="$script_dir/scripts/ztp-base.py"
+    ztp_script_src="$script_dir/scripts/ztp_script.py"
 else
     if ! command -v curl >/dev/null 2>&1; then
         echo "install.sh needs curl to fetch kea/*.conf and the quadlet/ unit files when run without a repo checkout" >&2
@@ -77,12 +77,12 @@ else
     curl -fsSL "$RAW_BASE/kea/kea-dhcp4.conf" -o "$kea_conf_dir/kea-dhcp4.conf"
     curl -fsSL "$RAW_BASE/kea/kea-ctrl-agent.conf" -o "$kea_conf_dir/kea-ctrl-agent.conf"
     curl -fsSL "$RAW_BASE/kea/rsyslog-kea-forward.conf" -o "$kea_conf_dir/rsyslog-kea-forward.conf"
-    curl -fsSL "$RAW_BASE/scripts/ztp-base.py" -o "$kea_conf_dir/ztp-base.py"
+    curl -fsSL "$RAW_BASE/scripts/ztp_script.py" -o "$kea_conf_dir/ztp_script.py"
     for f in "${QUADLET_FILES[@]}"; do
         curl -fsSL "$RAW_BASE/quadlet/$f" -o "$kea_conf_dir/$f"
     done
     quadlet_src_dir="$kea_conf_dir"
-    ztp_script_src="$kea_conf_dir/ztp-base.py"
+    ztp_script_src="$kea_conf_dir/ztp_script.py"
 fi
 
 if [ "$(id -u)" -eq 0 ]; then
@@ -225,11 +225,11 @@ fi
 # Best-effort: whichever interface Kea ends up listening on (resolved
 # above, or the original placeholder if it was already valid on this host)
 # is also the one devices reach Drawbridge through - used below to seed
-# scripts/ztp-base.py's DRAWBRIDGE_HOST automatically instead of leaving
+# scripts/ztp_script.py's DRAWBRIDGE_HOST automatically instead of leaving
 # its placeholder value for every install. Empty if detection above never
 # ran and the placeholder itself was unresolvable, or the interface simply
 # has no IPv4 address yet (e.g. still DHCP-pending) - either way, nothing
-# here to fail on, ztp-base.py just keeps its placeholder for manual editing.
+# here to fail on, ztp_script.py just keeps its placeholder for manual editing.
 final_kea_interface="${resolved_interface:-$interface}"
 device_facing_ip=""
 if [ -n "$final_kea_interface" ]; then
@@ -352,18 +352,18 @@ mkdir -p "$HOME/.local/share/drawbridge/data"
 # who creates it first (which would otherwise leave it root-owned under
 # UserNS=keep-id). Only copied if missing, same "never clobber an
 # operator's edits" posture as the Quadlet units above - re-running
-# install.sh must not overwrite a already-customized ztp-base.py. This also
+# install.sh must not overwrite a already-customized ztp_script.py. This also
 # establishes .../files/ itself, so no separate mkdir is needed for it.
 ztp_script_dir="$HOME/.local/share/drawbridge/files/scripts"
 mkdir -p "$ztp_script_dir"
-if [ ! -f "$ztp_script_dir/ztp-base.py" ]; then
-    echo "==> Seeding $ztp_script_dir/ztp-base.py"
-    install -m 644 "$ztp_script_src" "$ztp_script_dir/ztp-base.py"
+if [ ! -f "$ztp_script_dir/ztp_script.py" ]; then
+    echo "==> Seeding $ztp_script_dir/ztp_script.py"
+    install -m 644 "$ztp_script_src" "$ztp_script_dir/ztp_script.py"
     if [ -n "$device_facing_ip" ]; then
-        echo "==> Setting DRAWBRIDGE_HOST to $device_facing_ip (detected on $final_kea_interface) in $ztp_script_dir/ztp-base.py"
-        sed -i "s/^DRAWBRIDGE_HOST = '[^']*'/DRAWBRIDGE_HOST = '$device_facing_ip'/" "$ztp_script_dir/ztp-base.py"
+        echo "==> Setting DRAWBRIDGE_HOST to $device_facing_ip (detected on $final_kea_interface) in $ztp_script_dir/ztp_script.py"
+        sed -i "s/^DRAWBRIDGE_HOST = '[^']*'/DRAWBRIDGE_HOST = '$device_facing_ip'/" "$ztp_script_dir/ztp_script.py"
     else
-        echo "==> Could not detect an IPv4 address on '$final_kea_interface' - DRAWBRIDGE_HOST in $ztp_script_dir/ztp-base.py still needs manual editing"
+        echo "==> Could not detect an IPv4 address on '$final_kea_interface' - DRAWBRIDGE_HOST in $ztp_script_dir/ztp_script.py still needs manual editing"
     fi
 fi
 

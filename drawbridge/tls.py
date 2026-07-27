@@ -77,12 +77,12 @@ _ZTP_CA_CERT_END = '# --- DRAWBRIDGE_CA_CERT_PEM:END ---'
 
 
 def sync_ztp_script_ca_cert(cert_path: str, ztp_script_path: str) -> None:
-    """Keeps scripts/ztp-base.py's DRAWBRIDGE_CA_CERT_PEM constant in sync
+    """Keeps scripts/ztp_script.py's DRAWBRIDGE_CA_CERT_PEM constant in sync
     with whatever cert Drawbridge is actually serving (self-signed or
     operator-supplied at TLS_CERT_PATH — the device-side trust anchor has
     to match either way), so this doesn't need a manual copy-paste step
     after every ensure_cert() run. Only rewrites the block between the
-    BEGIN/END markers in the ZTP script (see scripts/ztp-base.py) —
+    BEGIN/END markers in the ZTP script (see scripts/ztp_script.py) —
     everything else in the file, including any real provisioning logic an
     operator has added, is left untouched. Must run after ensure_cert() so
     the cert actually exists to read.
@@ -91,7 +91,7 @@ def sync_ztp_script_ca_cert(cert_path: str, ztp_script_path: str) -> None:
     drawbridge-bootstrap's concern, not guaranteed to exist in every
     deployment or test) or no longer has the markers (an operator who
     removed them has opted out of this — see the comment in
-    scripts/ztp-base.py).
+    scripts/ztp_script.py).
     """
     script = Path(ztp_script_path)
     if not script.is_file():
