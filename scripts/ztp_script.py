@@ -186,30 +186,22 @@ def _ensure_c9200cx_trustpoint():
     same cert into the same trustpoint on every request_provisioning()/
     report_status()/log_to_server() call is redundant, one-time setup is
     all `copy https://...` ever needs for the rest of the run.
+
+    Authenticating the trustpoint alone isn't enough: confirmed on real
+    C9200CX hardware that without `ip http client secure-trustpoint`, IOS
+    XE's HTTP client validates `copy https://...` against the device's own
+    `TP-self-signed-NNNNNNNNN` identity trustpoint instead of DRAWBRIDGE-CA,
+    which never matches Drawbridge's cert and fails every fetch.
     """
     cli.configure(f'crypto pki trustpoint {TRUSTPOINT_NAME}')
-    cli.execute('enrollment terminal')
-    cli.execute('revocation-check none')
-    cli.execute('exit')
+    cli.cli('enrollment terminal')
+    cli.cli('revocation-check none')
+    cli.cli('exit')
     cli.configure(f'crypto pki authenticate {TRUSTPOINT_NAME}')
     cli.cli(DRAWBRIDGE_CA_CERT_PEM)
     cli.execute('quit')
     cli.execute('yes')
-
-
-def _configure_ssl_script():
-    eem_commands = ['event manager applet ssl',
-                    'event none maxrun 30',
-                    'action 1.0 cli command "enable"',
-                    'action 1.1 cli command "configure terminal"',
-                    f'action 1.2 cli command "crypto pki trustpoint {TRUSTPOINT_NAME}"',
-                    'action 1.3 cli command "exit"',
-                    f'action 1.4 cli command "crypto pki authenticate {TRUSTPOINT_NAME}"',
-                    f'action 1.5 cli command "{DRAWBRIDGE_CA_CERT_PEM}"',
-                    'action 1.6 cli command "quit',
-                    'action 1.7 cli command "yes"'
-                    ]
-    cli.configure(eem_commands)
+    cli.configure(f'ip http client secure-trustpoint {TRUSTPOINT_NAME}')
 
 
 def request_provisioning():
@@ -309,6 +301,8 @@ def main():
     DEVICE = Device(serial=serial, model=model, version=version, mac=mac, ip=ip)
 
     LOGGER = _setup_logger(name=f'{DEVICE.serial}-logger', platform=DEVICE.model, log_file_name=f'{DEVICE.serial}.log')
+
+    LOGGER.info("\n")
 
     if DEVICE.is_c9200cx:
         LOGGER.info(f'Platform is {DEVICE.model}. Manually inserting trustpoint name for TLS')

@@ -1,19 +1,9 @@
 # Sibling image to Containerfile, run in the same drawbridge pod (see
-# quadlet/drawbridge.pod). Terminates TLS (replacing Gunicorn's own — see
-# v0-3-2.md), gives a plain-HTTP request against :8080 a clean answer
-# instead of a connection reset (nginx's stream + ssl_preread modules
+# quadlet/drawbridge.pod). Terminates TLS, gives a plain-HTTP request against 
+# :8080 a clean answer instead of a connection reset (nginx's stream + ssl_preread modules
 # detect the protocol before routing, see container/nginx-drawbridge.conf),
-# and serves the ZTP script on :8090 (replacing the retired
-# drawbridge-bootstrap container from v0.3.1).
+# and serves the ZTP script on :8090
 #
-# Alpine, not the official nginx:alpine image — that image's entrypoint
-# machinery (config templating, privilege drop via nginx's own `user`
-# directive) assumes a root-started master process; this repo runs every
-# image as fixed non-root UID 1000 with no privilege drop at any point
-# (same posture as Containerfile.rsyslog).
-#
-# nginx-mod-stream is a separate Alpine package, not bundled into the base
-# `nginx` package — needed for the stream{} block above.
 FROM alpine:3.20
 
 RUN adduser -D -u 1000 nginx-drawbridge \
@@ -23,12 +13,7 @@ COPY container/nginx-drawbridge.conf /etc/nginx/nginx.conf
 
 USER nginx-drawbridge
 
-# Informational only, same posture as the other Containerfiles — actual
-# bind ports come from nginx-drawbridge.conf's listen directives.
 EXPOSE 8080
 EXPOSE 8090
 
-# -g "daemon off;": foreground (this container's only process, no
-# supervisor), matching Containerfile.rsyslog's -n / Containerfile's
-# direct-gunicorn-as-ENTRYPOINT pattern.
-ENTRYPOINT ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["nginx", "-e", "/dev/stderr", "-g", "daemon off;"]
