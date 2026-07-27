@@ -132,7 +132,7 @@ function statusProgressClass(status: UploadStatus): string {
             <td><span class="badge badge-outline">{{ TYPE_LABELS[f.file_type] }}</span></td>
             <td>{{ formatBytes(f.size_bytes) }}</td>
             <td :title="f.uploaded_at">{{ formatTimestamp(f.uploaded_at) }}</td>
-            <td>{{ f.uploaded_by ?? '—' }}</td>
+            <td>{{ f.uploaded_by ?? '-' }}</td>
             <td>
               <button
                 class="btn btn-error btn-xs"
@@ -162,7 +162,7 @@ function statusProgressClass(status: UploadStatus): string {
           @change="onSelect"
         />
         <p v-if="skippedCount > 0" class="text-warning text-sm mb-3">
-          {{ skippedCount }} file{{ skippedCount === 1 ? '' : 's' }} skipped — unsupported type.
+          {{ skippedCount }} file{{ skippedCount === 1 ? '' : 's' }} skipped - unsupported type.
         </p>
 
         <div v-if="staged.length > 0" class="mb-4">

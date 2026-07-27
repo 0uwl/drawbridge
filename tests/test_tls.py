@@ -66,6 +66,38 @@ def test_ensure_cert_includes_san_for_127_0_0_1_and_localhost(tmp_path):
     assert str(san.get_values_for_type(x509.IPAddress)[0]) == '127.0.0.1'
 
 
+def test_ensure_cert_extra_sans_are_added_alongside_loopback(tmp_path):
+    # Regression: a real device dials the deployment's actual address, not
+    # loopback — copy https://<address>:8080/... fails TLS hostname
+    # verification without <address> in the SAN, even with the CA trusted
+    # (see docs/deployment.md, "TLS").
+    cert_path = tmp_path / 'cert.pem'
+    key_path = tmp_path / 'key.pem'
+
+    ensure_cert(str(cert_path), str(key_path), extra_sans=['192.168.0.5', 'drawbridge.example'])
+
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    ips = [str(ip) for ip in san.get_values_for_type(x509.IPAddress)]
+    dns_names = san.get_values_for_type(x509.DNSName)
+    assert '127.0.0.1' in ips
+    assert '192.168.0.5' in ips
+    assert 'localhost' in dns_names
+    assert 'drawbridge.example' in dns_names
+
+
+def test_ensure_cert_extra_sans_defaults_to_loopback_only(tmp_path):
+    cert_path = tmp_path / 'cert.pem'
+    key_path = tmp_path / 'key.pem'
+
+    ensure_cert(str(cert_path), str(key_path), extra_sans=[])
+
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert [str(ip) for ip in san.get_values_for_type(x509.IPAddress)] == ['127.0.0.1']
+    assert list(san.get_values_for_type(x509.DNSName)) == ['localhost']
+
+
 # sync_ztp_script_ca_cert
 
 _SCRIPT_TEMPLATE = """\

@@ -19,12 +19,32 @@ from drawbridge.db import _sqlite_lock
 CERT_VALIDITY_DAYS = 3650
 
 
-def ensure_cert(cert_path: str, key_path: str) -> None:
+def _san_entry(value: str) -> x509.GeneralName:
+    """A SAN entry can be an IP or a hostname; IOS XE's HTTPS client (and
+    drawbridge-nginx's own hostname-verification testing) checks whichever
+    kind matches how the cert is actually reached, so TLS_SAN_IPS entries
+    are classified rather than assumed to all be one type.
+    """
+    try:
+        return x509.IPAddress(ipaddress.ip_address(value))
+    except ValueError:
+        return x509.DNSName(value)
+
+
+def ensure_cert(cert_path: str, key_path: str, extra_sans: list[str] | None = None) -> None:
     """Generates a self-signed cert/key pair at the given paths if they
     don't already exist; no-op otherwise. Must run before Gunicorn's master
     binds the listening socket (see gunicorn.conf.py, called at module
     level). Reuses drawbridge/db.py's fcntl.flock bootstrap-lock pattern
     rather than inventing new machinery.
+
+    extra_sans (TLS_SAN_IPS, comma-separated in gunicorn.conf.py) covers the
+    address(es) devices actually reach this deployment on — 127.0.0.1/
+    localhost below is only ever enough for drawbridge-nginx's own loopback
+    check, never for a real device's `copy https://<host>:8080/...`, whose
+    TLS hostname verification fails against a SAN that doesn't list <host>
+    even when the CA itself is correctly trusted (see docs/decisions.md,
+    "HTTPS cert trust on C9200CX").
     """
     # Must exist before _sqlite_lock() below, which opens a lock file
     # alongside cert_path — on a fresh volume mount, /app/data/tls/ doesn't
@@ -58,6 +78,7 @@ def ensure_cert(cert_path: str, key_path: str) -> None:
                 x509.SubjectAlternativeName([
                     x509.DNSName('localhost'),
                     x509.IPAddress(ipaddress.IPv4Address('127.0.0.1')),
+                    *(_san_entry(value) for value in extra_sans or []),
                 ]),
                 critical=False,
             )

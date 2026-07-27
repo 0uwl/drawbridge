@@ -253,6 +253,24 @@ otherwise trusted. **Upgrading from a pre-pod install:** delete
 them with the SAN on next start; an existing no-SAN cert is not replaced
 automatically.
 
+**`127.0.0.1`/`localhost` alone is never enough for a real device.** A
+device's `copy https://<address>:8080/...` does its own TLS hostname
+verification against whatever `<address>` it actually dialed — separate
+from, and in addition to, the CA trust `_ensure_c9200cx_trustpoint()`
+establishes (see [decisions.md](decisions.md), "HTTPS cert trust on
+C9200CX"). Trusting the CA does not make the handshake succeed if
+`<address>` isn't also listed in the cert's SAN: that fails hostname
+verification the same way a browser rejects a cert for the wrong domain,
+and since it happens before any HTTP request is parsed, it produces no
+entry in `drawbridge-nginx`'s access log to debug from — just an I/O error
+on the device side. `TLS_SAN_IPS` (below) adds whatever address(es)
+devices actually reach this deployment on to the generated cert's SAN;
+`install.sh` best-effort seeds it from the same interface detection it
+uses for `DRAWBRIDGE_HOST` (see "Container" above), but like that value it
+only applies on a fresh install and only takes effect the next time
+`ensure_cert()` actually generates a cert — set it (or add to it) by hand
+and delete `data/tls/cert.pem`/`data/tls/key.pem` to pick up a change.
+
 **`scripts/ztp_script.py`'s `DRAWBRIDGE_CA_CERT_PEM` is kept in sync
 automatically** — `drawbridge/tls.py`'s `sync_ztp_script_ca_cert()` runs
 right after `ensure_cert()` on every `drawbridge` container start (cheap
@@ -496,6 +514,7 @@ podman manifest push drawbridge-manifest <registry>/drawbridge:latest
 | `CREDENTIALS_DIRECTORY` | none | Set automatically by systemd when a unit uses `LoadCredential=`/`SetCredential=`; not meant to be set by hand. If a credential named `admin_password` exists in this directory on first run, it seeds the bootstrap admin's password without forcing a reset — see below and [authentication.md](authentication.md) |
 | `TLS_CERT_PATH` | `/app/data/tls/cert.pem` | Path to Drawbridge's TLS certificate. Self-signed and auto-generated here on first run if nothing exists at this path — mount your own cert to use it instead. See "TLS" above |
 | `TLS_KEY_PATH` | `/app/data/tls/key.pem` | Path to Drawbridge's TLS private key. Same first-run-generation behavior as `TLS_CERT_PATH` |
+| `TLS_SAN_IPS` | none | Comma-separated IPs/hostnames to add to the auto-generated cert's SAN, alongside the always-present `127.0.0.1`/`localhost`. Needed for any real device — `copy https://<address>:8080/...` fails hostname verification without `<address>` listed here even when its CA is correctly trusted. Only read on cert generation (unused if `TLS_CERT_PATH`/`TLS_KEY_PATH` already point at an existing cert); `install.sh` best-effort seeds it like `DRAWBRIDGE_HOST`. See "TLS" above |
 | `TLS_DISABLED` | unset (TLS on) | Set to `1` to skip TLS and run plain HTTP on `DRAWBRIDGE_PORT` directly — either local development, or a supported production mode for an operator bringing their own reverse proxy instead of `drawbridge-nginx` (also disable that unit in that case). See "TLS" above |
 | `SAML_SETTINGS_PATH` | `/app/data/saml` | Directory containing python3-saml's `settings.json`. SAML routes are disabled (404) unless a `settings.json` exists there — see "SAML SSO" above |
 

@@ -5,7 +5,7 @@ import type { FileType } from '../types'
 // what "an image" or "a config" is.
 export const ALLOWED_EXTENSIONS: Record<FileType, string[]> = {
   image: ['bin', 'spa', 'pkg', 'tar'],
-  config: ['cfg', 'conf', 'txt'],
+  config: ['cfg', 'conf', 'txt', 'config'],
 }
 
 export const TYPE_PLURAL: Record<FileType, string> = { image: 'images', config: 'configs' }

@@ -103,6 +103,19 @@ Environment=SECRET_KEY=CHANGE_ME_use_openssl_rand_hex_32
 #Environment=TLS_CERT_PATH=/app/data/tls/cert.pem
 #Environment=TLS_KEY_PATH=/app/data/tls/key.pem
 
+# Comma-separated IPs/hostnames devices actually reach this deployment on
+# (e.g. 192.168.100.1), added to the self-signed cert's SAN alongside the
+# always-present 127.0.0.1/localhost. Without an entry matching the address
+# in `copy https://<address>:8080/...`, IOS XE's HTTPS client fails
+# hostname verification even with the CA correctly trusted via
+# scripts/ztp_script.py's trustpoint import — see docs/deployment.md,
+# "TLS". install.sh best-effort fills this in, on a fresh install, from
+# the same interface detection it uses to seed ztp_script.py's
+# DRAWBRIDGE_HOST; only takes effect on cert generation, so also delete
+# data/tls/cert.pem and key.pem if the cert already existed before this
+# was set.
+#Environment=TLS_SAN_IPS=
+
 # Skips TLS entirely and serves plain HTTP directly on DRAWBRIDGE_PORT —
 # either local development, or a supported production mode for an
 # operator bringing their own reverse proxy instead of drawbridge-nginx

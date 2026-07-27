@@ -55,7 +55,11 @@ else:
     # termination; ensure_cert() is idempotent/first-run-only either way.
     _tls_cert_path = os.environ.get('TLS_CERT_PATH', _DEFAULT_TLS_CERT_PATH)
     _tls_key_path = os.environ.get('TLS_KEY_PATH', _DEFAULT_TLS_KEY_PATH)
-    ensure_cert(_tls_cert_path, _tls_key_path)
+    # Comma-separated extra SAN entries (IPs or hostnames) — see
+    # drawbridge/tls.py's ensure_cert() docstring for why 127.0.0.1/
+    # localhost alone isn't enough for real devices.
+    _tls_san_ips = [v.strip() for v in os.environ.get('TLS_SAN_IPS', '').split(',') if v.strip()]
+    ensure_cert(_tls_cert_path, _tls_key_path, extra_sans=_tls_san_ips)
 
     # Keeps scripts/ztp_script.py's DRAWBRIDGE_CA_CERT_PEM in sync with
     # whatever cert was just ensured above — see drawbridge/tls.py. Runs

@@ -311,6 +311,12 @@ podman pull "$NGINX_IMAGE"
 quadlet_dir="$HOME/.config/containers/systemd"
 mkdir -p "$quadlet_dir"
 
+# Tracked so TLS_SAN_IPS can be seeded below only into a genuinely fresh
+# drawbridge.container - never touch one that already exists (an
+# operator's edited SECRET_KEY etc. must never be clobbered by a re-run,
+# same posture as every other Quadlet unit here).
+drawbridge_container_freshly_installed=""
+
 for f in "${QUADLET_FILES[@]}"; do
     quadlet_src="$quadlet_src_dir/$f"
     quadlet_dest="$quadlet_dir/$f"
@@ -336,8 +342,23 @@ for f in "${QUADLET_FILES[@]}"; do
     else
         echo "==> Installing Quadlet unit to $quadlet_dest"
         install -m 644 "$quadlet_src" "$quadlet_dest"
+        if [ "$f" = "drawbridge.container" ]; then
+            drawbridge_container_freshly_installed="1"
+        fi
     fi
 done
+
+# Best-effort, same detection as DRAWBRIDGE_HOST below: without a SAN
+# matching the address devices actually reach this deployment on, IOS XE's
+# HTTPS client fails hostname verification on every copy https://... even
+# with the CA correctly trusted (see docs/deployment.md, "TLS"). Only seeded
+# into a freshly-installed unit, and only takes effect on cert generation -
+# an operator who re-runs install.sh after already starting the pod once
+# needs to delete data/tls/cert.pem and key.pem by hand to pick this up.
+if [ -n "$drawbridge_container_freshly_installed" ] && [ -n "$device_facing_ip" ]; then
+    echo "==> Setting TLS_SAN_IPS to $device_facing_ip (detected on $final_kea_interface) in $quadlet_dir/drawbridge.container"
+    sed -i "s/^#Environment=TLS_SAN_IPS=.*/Environment=TLS_SAN_IPS=$device_facing_ip/" "$quadlet_dir/drawbridge.container"
+fi
 
 # drawbridge.container's data directory (SQLite DB, TLS cert/key - see
 # docs/deployment.md "Container") - created here rather than asking the
@@ -369,11 +390,12 @@ fi
 
 echo "==> Done. Before starting the pod:"
 echo "      - edit SECRET_KEY (and ADMIN_PASSWORD or LoadCredential=) in $quadlet_dir/drawbridge.container"
-# DRAWBRIDGE_HOST is seeded automatically above when detection succeeds;
-# DRAWBRIDGE_CA_CERT_PEM gets patched in automatically by the drawbridge
-# container itself once it starts and generates its cert (drawbridge/tls.py,
-# see "TLS" in docs/deployment.md) - nothing to do here for either, unless
-# detection above failed (no IPv4 address on the interface yet), in which
-# case DRAWBRIDGE_HOST still needs a manual edit.
+# DRAWBRIDGE_HOST and TLS_SAN_IPS are both seeded automatically above when
+# detection succeeds; DRAWBRIDGE_CA_CERT_PEM gets patched in automatically
+# by the drawbridge container itself once it starts and generates its cert
+# (drawbridge/tls.py, see "TLS" in docs/deployment.md) - nothing to do here
+# for any of these, unless detection above failed (no IPv4 address on the
+# interface yet), in which case DRAWBRIDGE_HOST and TLS_SAN_IPS both still
+# need a manual edit.
 echo "      - systemctl --user daemon-reload && systemctl --user start drawbridge-pod.service"
 echo "    See docs/deployment.md for details."
