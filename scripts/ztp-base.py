@@ -24,7 +24,7 @@ import sys
 import logging
 from logging.handlers import SysLogHandler
 
-import cli # type: ignore
+from cli import configure, execute, cli # type: ignore
 
 # Must match the host/port devices reach Drawbridge on (see Option 67 in
 # kea/kea-dhcp4.conf). This script runs on the device (IOS XE Guestshell),
@@ -72,6 +72,7 @@ class Device:
         self.mac = mac
         self.ip = ip
         self.version = version
+        self.is_c9200cx = C9200CX_PLATFORM in model
 
     def to_dict(self):
         return {
@@ -114,12 +115,13 @@ def _setup_logger(name: str, platform: str, log_file_name: str, level=logging.IN
     new_logger.propagate = False
 
     # Formatter for log messages
-    formatter = logging.Formatter('%(asctime)s %(name)s: %(levelname)s - %(message)s', datefmt='%b %d %H:%M:%S')
-    stdout_formatter = logging.Formatter('%(asctime)s %(name)s: %(levelname)s - %(message)s', datefmt='%b %d %H:%M:%S')
+    formatter = logging.Formatter('[%(asctime)s] [%(name)s]: %(levelname)s - %(message)s', datefmt='%b %d %H:%M:%S')
+    stdout_formatter = logging.Formatter('[%(asctime)s] [ZTP Script]: %(levelname)s - %(message)s', datefmt='%b %d %H:%M:%S')
 
     # StreamHandler for stdout
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(level)
+    stdout_handler.setFormatter(stdout_formatter)
 
     # FileHandler for writing to a log file
     file_handler = logging.FileHandler(f'/bootflash/guest-share/{log_file_name}')
@@ -135,7 +137,7 @@ def _setup_logger(name: str, platform: str, log_file_name: str, level=logging.IN
     if not new_logger.handlers:
         new_logger.addHandler(stdout_handler)
         new_logger.addHandler(file_handler)
-        if C9200CX_PLATFORM not in platform:
+        if DEVICE.is_c9200cx:
             new_logger.addHandler(syslog_handler)
 
     return new_logger
@@ -149,9 +151,9 @@ def _get_device_info():
         tuple: (model_number, serial_number, software_version)
                If a value is not found, None is returned for that field.
     """
-    show_version = cli.cli('show version')
-    show_interfaces = cli.cli('show interfaces vlan 1')
-    show_ip_on_interface = cli.cli('sh ip int vlan 1')
+    show_version = cli('show version')
+    show_interfaces = cli('show interfaces vlan 1')
+    show_ip_on_interface = cli('sh ip int vlan 1')
 
     model = re.search(r'[Mm]odel [Nn]umber\s*:\s*(C[0-9A-Z\-]+)', show_version)
     serial = re.search(r'[Ss]ystem [Ss]erial [Nn]umber\s*:\s*([A-Z0-9]+)', show_version)
@@ -185,31 +187,32 @@ def _ensure_c9200cx_trustpoint():
     report_status()/log_to_server() call is redundant, one-time setup is
     all `copy https://...` ever needs for the rest of the run.
     """
-    cli.configure(f'crypto pki trustpoint {TRUSTPOINT_NAME}')
-    cli.execute('enrollment terminal')
-    cli.execute('revocation-check none')
-    cli.execute('exit')
-    cli.configure(f'crypto pki authenticate {TRUSTPOINT_NAME}')
-    cli.execute(DRAWBRIDGE_CA_CERT_PEM)
-    cli.execute('quit')
-    cli.execute('yes')
+    configure(f'crypto pki trustpoint {TRUSTPOINT_NAME}')
+    execute('enrollment terminal')
+    execute('revocation-check none')
+    execute('exit')
+    configure(f'crypto pki authenticate {TRUSTPOINT_NAME}')
+    cli(DRAWBRIDGE_CA_CERT_PEM)
+    execute('quit')
+    execute('yes')
+
 
 def _configure_ssl_script():
     eem_commands = ['event manager applet ssl',
                     'event none maxrun 30',
                     'action 1.0 cli command "enable"',
-                    'action 1.0 cli command "configure terminal"',
-                    f'action 1.0 cli command "crypto pki trustpoint {TRUSTPOINT_NAME}"',
-                    'action 1.0 cli command "exit"',
-                    f'action 1.0 cli command "crypto pki authenticate {TRUSTPOINT_NAME}"',
-                    f'action 1.0 cli command "{DRAWBRIDGE_CA_CERT_PEM}"',
-                    'action 1.1 cli command "quit',
-                    'action 1.2 cli command "yes"'
+                    'action 1.1 cli command "configure terminal"',
+                    f'action 1.2 cli command "crypto pki trustpoint {TRUSTPOINT_NAME}"',
+                    'action 1.3 cli command "exit"',
+                    f'action 1.4 cli command "crypto pki authenticate {TRUSTPOINT_NAME}"',
+                    f'action 1.5 cli command "{DRAWBRIDGE_CA_CERT_PEM}"',
+                    'action 1.6 cli command "quit',
+                    'action 1.7 cli command "yes"'
                     ]
-    cli.configure(eem_commands)
+    configure(eem_commands)
 
 
-def request_provisioning(serial, platform):
+def request_provisioning():
     """Phones home to Drawbridge before doing anything else. Any device on
     the provisioning VLAN can reach this — the allowlist check on the
     server side is the actual gate, not the caller's identity (see
@@ -219,9 +222,9 @@ def request_provisioning(serial, platform):
     only a URL and a destination file. Returns the parsed decision dict, or
     None if denied/unreachable.
     """
-    url = f'{DRAWBRIDGE_BASE_URL}/provision-request?serial={urllib.parse.quote(serial)}'
+    url = f'{DRAWBRIDGE_BASE_URL}/provision-request?serial={urllib.parse.quote(DEVICE.serial)}'
 
-    if C9200CX_PLATFORM in platform:
+    if DEVICE.is_c9200cx:
         # C9200CX's Guestshell has no usable network stack of its own —
         # direct socket calls fail. Fetch via IOS XE's own 'copy' primitive
         # instead (see docs/decisions.md "C9200CX network stack isolation").
@@ -247,9 +250,10 @@ def request_provisioning(serial, platform):
         return None  # e.g. 404 device_not_found — denied, fail closed
 
 
-def build_status_payload(serial):
+
+def build_status_payload():
     return {
-        'serial': serial,
+        'serial': DEVICE.serial,
         'event': 'provision_complete',
         'image': None,
         'config_file': None,
@@ -257,7 +261,7 @@ def build_status_payload(serial):
     }
 
 
-def _put_json(url, payload, platform, filename):
+def _put_json(url, payload, filename):
     """Shared PUT-JSON transport for report_status/log_to_server — both hit
     Drawbridge with a JSON body and no return value needed, unlike
     request_provisioning's GET-with-a-return-value shape, so this only
@@ -267,11 +271,11 @@ def _put_json(url, payload, platform, filename):
     the HTTP request — see docs/decisions.md. Other real platforms use a
     direct HTTP request instead.
     """
-    if C9200CX_PLATFORM in platform:
+    if DEVICE.is_c9200cx:
         with open('/bootflash/' + filename, 'w') as f:
             json.dump(payload, f)
         # IOS XE's 'copy' to an HTTP(S) destination issues a PUT (see decisions.md).
-        cli.execute(f'copy flash:{filename} {url}')
+        execute(f'copy flash:{filename} {url}')
         return
 
     context = ssl.create_default_context(cadata=DRAWBRIDGE_CA_CERT_PEM)
@@ -280,17 +284,17 @@ def _put_json(url, payload, platform, filename):
     urllib.request.urlopen(request, timeout=10, context=context)
 
 
-def report_status(payload, platform):
+def report_status(payload):
     """Reports completion to Drawbridge."""
     url = f'{DRAWBRIDGE_BASE_URL}/provision-complete'
-    _put_json(url, payload, platform, STATUS_FILENAME)
+    _put_json(url, payload, STATUS_FILENAME)
 
 
-def log_to_server(serial, message, platform):
+def log_to_server(message):
     """Reports one log line to Drawbridge's device-log feed (see
     docs/logging.md) — best-effort, same transport as report_status."""
     url = f'{DRAWBRIDGE_BASE_URL}/device-logs'
-    _put_json(url, {'serial': serial, 'message': message}, platform, 'devicelog.json')
+    _put_json(url, {'serial': DEVICE.serial, 'message': message}, 'devicelog.json')
 
 
 def main():
@@ -299,27 +303,28 @@ def main():
     model, serial, version, ip, mac = _get_device_info()
 
     if serial is None:
+        log_to_server('Provisioning failed. No serial from device info')
         return
 
     DEVICE = Device(serial=serial, model=model, version=version, mac=mac, ip=ip)
 
     LOGGER = _setup_logger(name=f'{DEVICE.serial}-logger', platform=DEVICE.model, log_file_name=f'{DEVICE.serial}.log')
 
-    if C9200CX_PLATFORM in DEVICE.model:
+    if DEVICE.is_c9200cx:
         LOGGER.info(f'Platform is {DEVICE.model}. Manually inserting trustpoint name for TLS')
         _ensure_c9200cx_trustpoint()
 
-    log_to_server(DEVICE.serial, 'provisioning started', DEVICE.model)
+    log_to_server('Provisioning started')
 
-    decision = request_provisioning(DEVICE.serial, DEVICE.model)
+    decision = request_provisioning()
     approved = decision is not None and decision.get('success')
-    log_to_server(DEVICE.serial, 'provision-request: ' + ('approved' if approved else 'denied/unreachable'), DEVICE.model)
+    log_to_server('Provision request: ' + ('approved' if approved else 'denied/unreachable'))
     if not approved:
         return  # denied or unreachable - exit cleanly, no completion callback
 
-    payload = build_status_payload(DEVICE.serial)
-    report_status(payload, DEVICE.model)
-    log_to_server(DEVICE.serial, 'provisioning complete', DEVICE.model)
+    payload = build_status_payload()
+    report_status(payload)
+    log_to_server('Provisioning complete')
 
 
 if __name__ == '__main__':
