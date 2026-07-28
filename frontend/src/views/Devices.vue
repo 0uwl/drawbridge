@@ -5,16 +5,23 @@ import { useLogStore } from '../stores/log'
 import { useFilesStore } from '../stores/files'
 import DeviceTabs from '../components/DeviceTabs.vue'
 import { formatTimestamp } from '../utils/format'
+import { usePolling } from '../composables/usePolling'
 import type { Device, DeviceCreatePayload, DeviceUpdatePayload, ProvisioningLog } from '../types'
 
 const devices = useDevicesStore()
 const log = useLogStore()
 const files = useFilesStore()
 onMounted(() => {
-  devices.list()
-  log.fetchLog()
   files.list()
 })
+// Same cadence as Sessions.vue's own polling — this page has no other way
+// to learn a device finished provisioning: its ProvisioningSession (and
+// therefore its row on the Sessions tab) is gone by then, and the
+// "Provisioned" badge here is sourced from this same log fetch.
+usePolling(() => {
+  devices.list()
+  log.fetchLog()
+}, 4000)
 
 const images = computed(() => files.items.filter((f) => f.file_type === 'image'))
 const configs = computed(() => files.items.filter((f) => f.file_type === 'config'))
@@ -113,7 +120,12 @@ async function confirmRemove(): Promise<void> {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="d in devices.items" :key="d.serial">
+          <tr
+            v-for="d in devices.items"
+            :key="d.serial"
+            class="cursor-pointer hover"
+            @click="$router.push({ path: '/device-logs', query: { serial: d.serial } })"
+          >
             <td class="font-mono">{{ d.serial }}</td>
             <td>{{ d.mac ?? '—' }}</td>
             <td>{{ d.description ?? '—' }}</td>
@@ -128,8 +140,8 @@ async function confirmRemove(): Promise<void> {
             </td>
             <td>
               <div class="flex gap-2">
-                <button class="btn btn-xs" @click="openEdit(d)">Edit</button>
-                <button class="btn btn-error btn-xs" @click="pendingRemove = d.serial">Remove</button>
+                <button class="btn btn-xs" @click.stop="openEdit(d)">Edit</button>
+                <button class="btn btn-error btn-xs" @click.stop="pendingRemove = d.serial">Remove</button>
               </div>
             </td>
           </tr>

@@ -4,7 +4,6 @@ from drawbridge.db import get_session
 from drawbridge.queries import (
     add_log_entry,
     create_provisioning_session,
-    delete_device_logs_by_serial,
     delete_provisioning_session,
     get_device,
     get_provisioning_session,
@@ -100,12 +99,13 @@ def create_blueprint():
             detail=detail,
         )
         delete_provisioning_session(session, serial)
-        if event == 'provision_complete':
-            # A clean success has no further troubleshooting value — clear
-            # the raw device-log stream now rather than waiting out
-            # log_retention_days like a failure's does (see
-            # docs/database.md, "Log Retention & Data Minimisation").
-            delete_device_logs_by_serial(session, serial)
+        # DeviceLogEntry rows are deliberately NOT cleared here on a clean
+        # success — an operator wants to see the raw run that just
+        # completed, not just the "Provisioned" summary (see
+        # frontend/src/views/Devices.vue). They're cleared instead when the
+        # device is removed from the allowlist entirely (devices.py's
+        # DELETE route) or age out via log_retention_days like everything
+        # else — see docs/database.md, "Log Retention & Data Minimisation".
         session.commit()
 
         return success_response(f'{serial} provisioning recorded')

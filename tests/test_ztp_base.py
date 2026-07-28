@@ -106,12 +106,17 @@ def _urlopen_returning(payload):
 
 
 def _set_device(module, serial='TEST-SERIAL-0001', model='OTHER-PLATFORM'):
-    """Stands in for main()'s DEVICE construction: request_provisioning/
+    """Stands in for main()'s DEVICE/LOGGER construction: request_provisioning/
     report_status/log_to_server now read the module-global DEVICE instead of
-    taking serial/platform arguments, so exercising them directly (without
-    going through main()) requires setting it up first."""
+    taking serial/platform arguments, and log_to_server() also reads the
+    module-global LOGGER (main() always sets both up before any of these
+    are ever called), so exercising them directly (without going through
+    main()) requires setting both up first. A plain logger, not
+    module._setup_logger() — that writes a FileHandler under
+    /bootflash/guest-share/, which doesn't exist off-device."""
     module.DEVICE = module.Device(serial=serial, model=model, mac='00:1b:0c:12:34:56',
                                    ip='192.168.100.50', version='17.9.1')
+    module.LOGGER = logging.getLogger('ztp-test')
     return module.DEVICE
 
 
@@ -187,7 +192,7 @@ def test_main_calls_log_to_server_at_start_request_and_completion_when_approved(
 
     assert log_to_server.call_count == 3
     messages = [call.args[0] for call in log_to_server.call_args_list]
-    assert messages[0] == 'Provisioning started'
+    assert messages[0] == 'Provisioning started. Requesting permission from Drawbridge'
     assert messages[1] == 'Provision request: approved'
     assert messages[2] == 'Provisioning complete'
 
@@ -201,7 +206,7 @@ def test_main_calls_log_to_server_at_start_and_request_only_when_denied(ztp_scri
     report_status.assert_not_called()
     assert log_to_server.call_count == 2
     messages = [call.args[0] for call in log_to_server.call_args_list]
-    assert messages[0] == 'Provisioning started'
+    assert messages[0] == 'Provisioning started. Requesting permission from Drawbridge'
     assert messages[1] == 'Provision request: denied/unreachable'
 
 
@@ -284,7 +289,12 @@ def test_request_provisioning_on_c9200cx_does_not_set_up_its_own_trustpoint(ztp_
 
     # No /bootflash/provision-request.json in the test sandbox - falls
     # through to the documented fail-closed None, same as a real denial.
-    result = ztp_script_mock.request_provisioning()
+    # log_to_server() itself is mocked out: on this OSError path it writes
+    # DEVICE.is_c9200cx's own /bootflash/guest-share/ file too, which this
+    # test sandbox doesn't have either — same posture as
+    # test_main_sets_up_trustpoint_exactly_once_for_c9200cx above.
+    with patch.object(ztp_script_mock, 'log_to_server'):
+        result = ztp_script_mock.request_provisioning()
 
     assert result is None
     assert not any(c.startswith('crypto pki') for c in fake_cli.calls)

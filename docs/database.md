@@ -142,10 +142,11 @@ handler that just rejected the call. An operator-initiated cancel writes a
 session, so the outcome is never lost the way a silent auto-expiry's would
 be.
 
-A cancelled session's `DeviceLogEntry` rows are **not** cleared — treated
-the same as a failure, not a success (see "Log Retention & Data
+A cancelled session's `DeviceLogEntry` rows are **not** cleared — same as
+every other outcome, including a clean success (see "Log Retention & Data
 Minimisation" below): those are exactly the logs an operator investigating
-"why did this get stuck" would want.
+"why did this get stuck," or just reviewing the run that just completed,
+would want.
 
 ## Schema evolution
 
@@ -257,24 +258,20 @@ troubleshooting, not asset tracking.
   retention rule covers all device-identifying archival data.
 - `DeviceLogEntry` (see [logging.md](logging.md)) shares the same
   `log_retention_days` setting — not a second, independently configured
-  retention knob — but isn't purely time-based like `ProvisioningLog`:
-  a device's raw log stream is only useful for watching that specific run
-  in progress, so on a **successful** `provision_complete`
-  (`drawbridge/api/leases.py`) its `DeviceLogEntry` rows are deleted
-  immediately, regardless of `log_retention_days`. A **failed** or
-  **cancelled** run's rows are left in place — still troubleshooting-relevant
-  — and age out via the same lazy-purge-on-insert pattern as everything
-  else, until a later successful completion for that serial clears them,
-  `log_retention_days` catches up with them first, or the device is removed
-  from the allowlist entirely (`DELETE /api/v1/devices/<serial>` also clears
-  that serial's `DeviceLogEntry` rows unconditionally — a device that's no
-  longer allowlisted has nothing left for Drawbridge to track except its
-  `ProvisioningLog` history).
+  retention knob. Unlike an early version of this policy, a **successful**
+  `provision_complete` (`drawbridge/api/leases.py`) does *not* clear a
+  device's `DeviceLogEntry` rows — an operator reviewing the Allowlist page
+  (`frontend/src/views/Devices.vue`) can click into a provisioned device's
+  row and see the raw run that just completed, not just the "Provisioned"
+  summary. Rows age out via the same lazy-purge-on-insert pattern as
+  `ProvisioningLog`, until `log_retention_days` catches up with them, or
+  the device is removed from the allowlist entirely (`DELETE
+  /api/v1/devices/<serial>` clears that serial's `DeviceLogEntry` rows
+  unconditionally — a device that's no longer allowlisted has nothing left
+  for Drawbridge to track except its `ProvisioningLog` history).
 - `KeaLogEntry` (see [logging.md](logging.md)) also shares
   `log_retention_days`, purged lazily on insert the same way
-  `ProvisioningLog` is — there's no per-successful-run early-clear behavior
-  here the way `DeviceLogEntry` has, since a Kea log line was never tied to
-  one device's run to begin with. No `serial`/MAC column exists on this
-  table at all — Kea's own DHCP server logs carry no device-identifying
+  `ProvisioningLog`/`DeviceLogEntry` are. No `serial`/MAC column exists on
+  this table at all — Kea's own DHCP server logs carry no device-identifying
   content in Drawbridge's schema, so there's nothing to minimise beyond the
   normal time-based purge.

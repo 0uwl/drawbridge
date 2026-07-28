@@ -96,11 +96,11 @@ class DeviceLogEntry(Base):
 Purged by the same `log_retention_days` `Setting` row `ProvisioningLog`
 uses, via the same lazy-purge-on-insert pattern (`queries.py`'s
 `add_device_log_entry`/`purge_expired_device_logs`) — not a second,
-independently configured retention knob — but cleared immediately (ahead
-of that retention window) on a successful `provision_complete` or when the
-device is removed from the allowlist entirely. See
-[database.md](database.md), "Log Retention & Data Minimisation", for the
-full rule.
+independently configured retention knob. Not cleared early on a
+successful `provision_complete` — rows survive until `log_retention_days`
+catches up with them, or the device is removed from the allowlist
+entirely. See [database.md](database.md), "Log Retention & Data
+Minimisation", for the full rule.
 
 **Syslog→serial correlation**: `container/rsyslog-drawbridge.conf`'s
 `deviceLogBody` template sends each line as `{"ip": "<fromhost-ip>",
@@ -239,10 +239,8 @@ class KeaLogEntry(Base):
 No `serial` column — see "Why a separate pipeline" above. Purged by the
 same `log_retention_days` `Setting` row, via the same
 lazy-purge-on-insert pattern (`queries.py`'s `add_kea_log_entry`/
-`purge_expired_kea_logs`) as `DeviceLogEntry`/`ProvisioningLog` — no
-early-clear-on-success behavior, since a Kea log line was never tied to one
-device's run to begin with. See [database.md](database.md), "Log Retention
-& Data Minimisation".
+`purge_expired_kea_logs`) as `DeviceLogEntry`/`ProvisioningLog`. See
+[database.md](database.md), "Log Retention & Data Minimisation".
 
 **API:**
 

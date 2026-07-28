@@ -62,7 +62,7 @@ STATUS_FILENAME = 'status.json'
 
 PROVISION_REQUEST_FILENAME = 'provision-request.json'
 PROVISION_REQUEST_FLASH_PATH = 'flash:guest-share/' + PROVISION_REQUEST_FILENAME
-PROVISION_REQUEST_LOCAL_PATH = '/bootflash/guest-share' + PROVISION_REQUEST_FILENAME
+PROVISION_REQUEST_LOCAL_PATH = '/bootflash/guest-share/' + PROVISION_REQUEST_FILENAME
 
 # IOS groups a certificate chain's hex dump into 4-byte (8 hex char) groups,
 # 7 groups (28 bytes) per line - matches what `show running-config` renders
@@ -226,51 +226,7 @@ def _ensure_c9200cx_trustpoint():
     """Installs DRAWBRIDGE_CA_CERT_PEM as a trusted IOS XE trustpoint so
     `copy https://...` can validate Drawbridge's certificate instead of
     blocking on an interactive accept/reject prompt it has no TTY to
-    answer, or failing outright - IOS XE's HTTPS client does not silently
-    accept an unverifiable cert. Called once, from main(), right after the
-    platform is confirmed as C9200CX - not per network call:
-    re-authenticating the same cert into the same trustpoint on every
-    request_provisioning()/report_status()/log_to_server() call is
-    redundant, one-time setup is all `copy https://...` ever needs for the
-    rest of the run.
-
-    Configuring the trustpoint alone isn't enough: confirmed on real
-    C9200CX hardware that without `ip http client secure-trustpoint`, IOS
-    XE's HTTP client validates `copy https://...` against the device's own
-    `TP-self-signed-NNNNNNNNN` identity trustpoint instead of DRAWBRIDGE-CA,
-    which never matches Drawbridge's cert and fails every fetch.
-
-    Deliberately does not use `crypto pki authenticate` at all (whether
-    paired with `enrollment terminal` or `enrollment url`) - confirmed on
-    real hardware that `cli.configure()`/`cli.configurep()` blocks until
-    the command it's given fully returns, and `crypto pki authenticate`
-    never returns on its own: it always ends in an interactive prompt
-    (pasting the cert itself under `enrollment terminal`, or accepting its
-    fingerprint under either mode) that a second, later call can never
-    actually deliver, since the first call is already blocked waiting for
-    it. See _pem_to_ios_cert_chain_block() - installing the CA cert
-    directly as a `crypto pki certificate chain` block is pure declarative
-    config, so nothing after it is left waiting on further input. Matches
-    what any router's own saved config looks like for an already-trusted
-    trustpoint. Confirmed on real C9200CX hardware: this exact sequence
-    (trustpoint declaration, certificate chain block, secure-trustpoint),
-    run by hand at the console from a freshly-erased config, results in
-    `show crypto pki certificate` reporting `Status: Available` and
-    `copy https://...` succeeding - no `crypto pki authenticate`, no
-    interactive prompt, no reload needed.
-
-    `show crypto pki certificate <trustpoint> pem` will still report "The
-    specified trustpoint is not enrolled" - that's benign and expected, not
-    a sign this didn't work. "Enrolled" there refers to the *router*
-    having its own identity certificate issued by this CA (`crypto pki
-    enroll`, for proving the router's own identity to a peer, e.g. mutual
-    TLS) - a completely different operation from authenticating a CA cert
-    as a trust anchor for validating *someone else's* certificate, which is
-    all `copy https://...` ever needs. Drawbridge never asks devices for a
-    client certificate, so the router never needs an identity cert of its
-    own; `Status: Available` on the CA certificate itself (`show crypto pki
-    certificate <trustpoint>`, no `pem`) is the field that actually matters
-    here.
+    answer, or failing outright
     """
     assert DRAWBRIDGE_CA_CERT_PEM is not None  # synced by drawbridge/tls.py before real use
 
@@ -318,7 +274,8 @@ def request_provisioning():
         try:
             with open(PROVISION_REQUEST_LOCAL_PATH) as f:
                 return json.load(f)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            log_to_server(f'Failed to read request result from {PROVISION_REQUEST_LOCAL_PATH}: {e}')
             return None
 
     # Other platforms: Guestshell has its own network stack - verify
@@ -327,7 +284,8 @@ def request_provisioning():
     try:
         with urllib.request.urlopen(url, timeout=10, context=context) as response:
             return json.load(response)
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as e:
+        log_to_server(f'Failed to request provisioning from {url}: {e}')
         return None  # e.g. 404 device_not_found - denied, fail closed
 
 
@@ -373,10 +331,7 @@ def log_to_server(message):
     """Reports one log line to Drawbridge's device-log feed
     """
     url = f'{DRAWBRIDGE_BASE_URL}/device-logs'
-    if 'LOGGER' in globals():
-        LOGGER.info(f'Sending message: "{message}" to {url}')
-    else:
-        print(f'Sending message: "{message}" to {url}')
+    LOGGER.info(message)
     _put_json(url, {'serial': DEVICE.serial, 'message': message}, 'devicelog.json')
 
 
@@ -389,7 +344,7 @@ def main():
     LOGGER = _setup_logger(name=f'{DEVICE.serial}-logger', platform=DEVICE.model, log_file_name=f'{DEVICE.serial}.log')
 
     if serial is None:
-        log_to_server('Provisioning failed. No serial from device info')
+        log_to_server('ZTP script failed. No serial could be parsed from device')
         return
 
     print()
@@ -398,7 +353,7 @@ def main():
         LOGGER.info(f'Platform is {DEVICE.model}. Manually inserting trustpoint name for TLS')
         _ensure_c9200cx_trustpoint()
 
-    log_to_server('Provisioning started')
+    log_to_server('Provisioning started. Requesting permission from Drawbridge')
 
     decision = request_provisioning()
     approved = decision is not None and decision.get('success')
