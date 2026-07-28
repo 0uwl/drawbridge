@@ -65,6 +65,10 @@ def fake_cli(monkeypatch):
     module.execute = MagicMock(side_effect=execute)
     module.cli = MagicMock(side_effect=cli)
     module.configure = MagicMock(side_effect=configure)
+    # scripts/ztp_script.py's trustpoint setup uses configurep(), not
+    # configure() — same recording behavior, real Guestshell distinction
+    # (prompt-handling variant) doesn't matter for this fake.
+    module.configurep = MagicMock(side_effect=configure)
     monkeypatch.setitem(sys.modules, 'cli', module)
     return module
 
@@ -214,15 +218,60 @@ def test_other_platform_with_cli_verifies_via_cadata_not_copy(ztp_script_mock, f
 
 # C9200CX trustpoint setup
 
-def test_ensure_c9200cx_trustpoint_authenticates_the_configured_cert(ztp_script_mock, fake_cli, monkeypatch):
-    monkeypatch.setattr(ztp_script_mock, 'DRAWBRIDGE_CA_CERT_PEM', 'FAKE-PEM-BODY')
+# A real (if throwaway) cert — _pem_to_ios_cert_chain_block() base64-decodes
+# it for real, so this needs valid PEM/base64, not just a placeholder string
+# (regression: an earlier version of this test used 'FAKE-PEM-BODY', which
+# stopped working the moment the cert content was actually decoded instead
+# of just relayed as a literal string to `crypto pki authenticate`'s
+# terminal-paste prompt — see _ensure_c9200cx_trustpoint()'s docstring for
+# why that whole approach was replaced).
+_FAKE_CA_CERT_PEM = """-----BEGIN CERTIFICATE-----
+MIIBODCB66ADAgECAhR46MvnVcLerfN9Cg1RkBTaDZxwbjAFBgMrZXAwEjEQMA4G
+A1UEAwwHdGVzdC1jYTAeFw0yNjA3MjgwOTU2MDRaFw0yNjA3MjkwOTU2MDRaMBIx
+EDAOBgNVBAMMB3Rlc3QtY2EwKjAFBgMrZXADIQCq4tNuv3UK58fQX9KkXkQ/Catb
+a2VCuluIWotDFc9QCaNTMFEwHQYDVR0OBBYEFCkHCgopqvCz7les/FtqYxiEIZED
+MB8GA1UdIwQYMBaAFCkHCgopqvCz7les/FtqYxiEIZEDMA8GA1UdEwEB/wQFMAMB
+Af8wBQYDK2VwA0EAn9RZYwZNQdhb9Hyu2jOjos/R/A+HLxiCoq6Idgls0v+tIXsE
+XvraTZDSRjRK0XTlSxTXMyIM7VDz2NWrXz+GDg==
+-----END CERTIFICATE-----"""
+
+
+def test_ensure_c9200cx_trustpoint_installs_the_configured_cert(ztp_script_mock, fake_cli, monkeypatch):
+    monkeypatch.setattr(ztp_script_mock, 'DRAWBRIDGE_CA_CERT_PEM', _FAKE_CA_CERT_PEM)
 
     ztp_script_mock._ensure_c9200cx_trustpoint()
 
-    trustpoint_call = next(i for i, c in enumerate(fake_cli.calls) if c.startswith('crypto pki trustpoint'))
-    authenticate_call = next(i for i, c in enumerate(fake_cli.calls) if c.startswith('crypto pki authenticate'))
-    assert trustpoint_call < authenticate_call
-    assert 'FAKE-PEM-BODY' in fake_cli.calls
+    trustpoint_call = next(c for c in fake_cli.calls if c.startswith('crypto pki trustpoint'))
+    cert_chain_call = next(c for c in fake_cli.calls if c.startswith('crypto pki certificate chain'))
+    secure_trustpoint_call = next(c for c in fake_cli.calls if c.startswith('ip http client secure-trustpoint'))
+    assert (
+        fake_cli.calls.index(trustpoint_call)
+        < fake_cli.calls.index(cert_chain_call)
+        < fake_cli.calls.index(secure_trustpoint_call)
+    )
+
+    # No crypto pki authenticate at all — see _ensure_c9200cx_trustpoint()'s
+    # docstring for why (its interactive fingerprint-accept prompt can
+    # never be answered through cli.configurep()'s blocking call model).
+    # The cert is installed directly as its own `crypto pki certificate
+    # chain` config block instead.
+    assert not any('crypto pki authenticate' in c for c in fake_cli.calls)
+    assert 'crypto pki certificate chain DRAWBRIDGE-CA' in cert_chain_call
+    assert 'certificate ca 01' in cert_chain_call
+    assert 'quit' in cert_chain_call
+
+
+def test_ensure_c9200cx_trustpoint_cert_chain_block_round_trips_the_der(ztp_script_mock):
+    import base64
+
+    block = ztp_script_mock._pem_to_ios_cert_chain_block(_FAKE_CA_CERT_PEM)
+
+    der_from_block = bytes.fromhex(''.join(line.strip() for line in block.splitlines()))
+
+    body = ''.join(line for line in _FAKE_CA_CERT_PEM.strip().splitlines() if not line.startswith('-----'))
+    der_from_pem = base64.b64decode(body)
+
+    assert der_from_block == der_from_pem
 
 
 def test_request_provisioning_on_c9200cx_does_not_set_up_its_own_trustpoint(ztp_script_mock, fake_cli):

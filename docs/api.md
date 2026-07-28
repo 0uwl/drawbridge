@@ -52,7 +52,7 @@ served over plain HTTP on `:8090`, not through this Flask app at all. See
 | GET | `/api/v1/settings/log-retention` | Current log retention setting (days, or indefinite) |
 | PUT | `/api/v1/settings/log-retention` | Update log retention setting (admin only) |
 | GET | `/api/v1/device-logs` | List raw device log entries (auth required); optional `serial` query filter. Optional `after_id` returns only rows with `id` greater than the given value, newest first, same as without it — for polling clients that already hold everything up to that id and want just what's new, instead of re-fetching the whole (potentially long) list every poll |
-| POST | `/api/v1/device-logs` | Append a raw device log entry. Two body shapes: `{serial, message}` (the ZTP script's `log_to_server()`, `source='script'`) or `{ip, message}` (rsyslog's `omhttp` action, `source='syslog'`, IP best-effort correlated to a `ProvisioningSession` via `find_active_session_by_ip`). Either shape may also include an optional `state`: if given, it must be one of `PROVISIONING_STATES` (`422 invalid_state` otherwise) and is applied directly to the correlated session, skipping pattern matching entirely; without it, `message` is run through `drawbridge/device_events.py`'s `detect_state()` instead — see [logging.md](logging.md) |
+| PUT/POST | `/api/v1/device-logs` | Append a raw device log entry. Two body shapes: `{serial, message}` (the ZTP script's `log_to_server()`, `source='script'`) or `{ip, message}` (rsyslog's `omhttp` action, `source='syslog'`, IP best-effort correlated to a `ProvisioningSession` via `find_active_session_by_ip`). Either shape may also include an optional `state`: if given, it must be one of `PROVISIONING_STATES` (`422 invalid_state` otherwise) and is applied directly to the correlated session, skipping pattern matching entirely; without it, `message` is run through `drawbridge/device_events.py`'s `detect_state()` instead — see [logging.md](logging.md). Both methods accepted: `log_to_server()` reaches this via IOS XE's `copy` primitive on C9200CX, which issues a PUT; rsyslog's `omhttp` action uses POST |
 | GET | `/api/v1/kea-logs` | List Kea's own DHCP server log entries (auth required). Optional `after_id`, same polling semantics as `GET /device-logs`. No `serial` filter — these lines carry no device correlation, unlike device logs — see [logging.md](logging.md) |
 | POST | `/api/v1/kea-logs` | Append a Kea log entry, `{message}`. Called by `drawbridge-rsyslog`'s second `omhttp` action, fed by a host-side rsyslog rule (`kea/rsyslog-kea-forward.conf`) forwarding Kea's local syslog output — open route, same posture as `POST /device-logs` |
 
@@ -63,7 +63,7 @@ Every `/api/devices`, `/api/log`, `/api/users`, `/api/settings/*`, and
 `GET /files/<type>/<filename>` download endpoints are unauthenticated so that
 IOS XE devices can fetch images and configs during ZTP without
 credentials; access is restricted at the network level (provisioning VLAN).
-`/api/provision-request`, `/api/provision-complete`, `POST
+`/api/provision-request`, `/api/provision-complete`, `PUT/POST
 /api/device-logs`, and `POST /api/kea-logs` are all open routes called by
 devices or rsyslog on their behalf (never operators) — gated by the
 serial/IP lookup itself (and, at the perimeter, network isolation), not by

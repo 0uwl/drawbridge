@@ -30,7 +30,7 @@ def create_blueprint():
         entries = list_device_logs(session, serial=serial, after_id=after_id)
         return success_response('Returned device logs', payload=[e.as_dict() for e in entries], level=logging.DEBUG)
 
-    @bp.post('/device-logs')
+    @bp.route('/device-logs', methods=['PUT', 'POST'])
     def post_device_log():
         """Two callers, two body shapes. The ZTP script's log_to_server()
         (see scripts/ztp_script.py) sends {serial, message} — source is
@@ -41,6 +41,13 @@ def create_blueprint():
         match just means the row's serial stays null. Open route, no auth
         decorator — same posture as leases.py's provision-request/
         provision-complete: gated by lookup, not caller identity.
+
+        PUT is accepted alongside POST for the same reason
+        leases.py's /provision-complete does: on C9200CX, log_to_server()
+        can only reach this via IOS XE's `copy` primitive (see
+        docs/decisions.md, "C9200CX network stack isolation"), and `copy`
+        to an HTTP(S) destination issues a PUT, not a POST. rsyslog's
+        omhttp action (the other caller) still uses POST.
 
         Either shape may also include an explicit `state`: the script knows
         its own lifecycle steps (fetching a config, applying it) that no

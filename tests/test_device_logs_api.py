@@ -88,6 +88,21 @@ def test_post_device_log_known_device_persists_row(client, app, device):
     assert rows[0].message == 'provisioning started'
 
 
+def test_put_device_log_known_device_persists_row(client, app, device):
+    # Regression: log_to_server() on C9200CX can only reach this route via
+    # IOS XE's `copy` primitive, which issues a PUT, not a POST — the route
+    # must accept both (see docs/decisions.md, "C9200CX network stack
+    # isolation").
+    response = client.put(f'{BASE}/device-logs', json={'serial': device.serial, 'message': 'provisioning started'})
+    assert response.status_code == 200
+
+    with app.app_context():
+        from drawbridge.models import DeviceLogEntry
+        rows = get_session().query(DeviceLogEntry).all()
+    assert len(rows) == 1
+    assert rows[0].serial == device.serial
+
+
 def test_post_device_log_active_session_without_device_row_is_accepted(client, app, active_session):
     """A serial with an active ProvisioningSession but no allowlisted Device
     row can still log — mirrors leases.py's own gate shape rather than

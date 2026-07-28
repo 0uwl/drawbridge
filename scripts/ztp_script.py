@@ -13,6 +13,7 @@ tests/ztp_mock.py for a `requests`-based simulation of this same contract,
 used by the test suite instead of running this file off-device.
 """
 
+import base64
 import json
 import re
 import ssl
@@ -60,8 +61,14 @@ TRUSTPOINT_NAME = 'DRAWBRIDGE-CA'
 STATUS_FILENAME = 'status.json'
 
 PROVISION_REQUEST_FILENAME = 'provision-request.json'
-PROVISION_REQUEST_FLASH_PATH = 'flash:' + PROVISION_REQUEST_FILENAME
-PROVISION_REQUEST_LOCAL_PATH = '/bootflash/' + PROVISION_REQUEST_FILENAME
+PROVISION_REQUEST_FLASH_PATH = 'flash:guest-share/' + PROVISION_REQUEST_FILENAME
+PROVISION_REQUEST_LOCAL_PATH = '/bootflash/guest-share' + PROVISION_REQUEST_FILENAME
+
+# IOS groups a certificate chain's hex dump into 4-byte (8 hex char) groups,
+# 7 groups (28 bytes) per line — matches what `show running-config` renders
+# for any trustpoint's stored CA cert.
+_IOS_HEX_GROUP_CHARS = 8
+_IOS_HEX_GROUPS_PER_LINE = 7
 
 LOGGER: logging.Logger
 
@@ -176,32 +183,116 @@ def _get_device_info():
     )
 
 
-def _ensure_c9200cx_trustpoint():
-    """Imports DRAWBRIDGE_CA_CERT_PEM into an IOS XE trustpoint so `copy
-    https://...` can validate Drawbridge's certificate instead of blocking
-    on an interactive accept/reject prompt it has no TTY to answer, or
-    failing outright — IOS XE's HTTPS client does not silently accept an
-    unverifiable cert. Called once, from main(), right after the platform
-    is confirmed as C9200CX — not per network call: re-authenticating the
-    same cert into the same trustpoint on every request_provisioning()/
-    report_status()/log_to_server() call is redundant, one-time setup is
-    all `copy https://...` ever needs for the rest of the run.
+def _pem_to_ios_cert_chain_block(pem: str) -> str:
+    """Renders a PEM certificate as the `crypto pki certificate chain`
+    config block IOS itself uses to persist an authenticated trustpoint's CA
+    cert (see `show running-config` on any router with one configured) —
+    the exact hex-dump format (4-byte/8-hex-char groups, 7 per line,
+    2-space-indented, terminated with `quit`) IOS renders and re-parses
+    certs in. PEM is base64-encoded DER with header/footer lines — no
+    crypto library needed to strip down to the raw DER bytes this needs.
 
-    Authenticating the trustpoint alone isn't enough: confirmed on real
+    The `certificate ca <serial>` label below is an arbitrary hex token,
+    not the certificate's real X.509 serial number — it only exists to
+    distinguish multiple entries within one trustpoint's chain. Hardcoded
+    rather than a parameter: this only ever installs a single CA cert into
+    a single trustpoint, so there's nothing for a caller to vary it for,
+    and nothing downstream reads it back.
+
+    Feeding this block straight into config mode installs the cert as
+    already-trusted with no further step — no `crypto pki authenticate`,
+    so no interactive fingerprint-accept prompt afterward either. That
+    matters here specifically: `cli.configure()`/`cli.configurep()` block
+    until a command fully returns, so anything needing a follow-up
+    interactive response (accepting a paste, answering yes/no) can never
+    actually get one — the module has already blocked on the first call
+    by the time a second call could supply it. `crypto pki authenticate`
+    always ends in exactly that kind of prompt regardless of enrollment
+    mode (terminal or url), which is why this sidesteps it entirely rather
+    than trying to answer it.
+    """
+    body = ''.join(line for line in pem.strip().splitlines() if not line.startswith('-----'))
+    hex_bytes = base64.b64decode(body).hex().upper()
+    groups = [hex_bytes[i:i + _IOS_HEX_GROUP_CHARS] for i in range(0, len(hex_bytes), _IOS_HEX_GROUP_CHARS)]
+    lines_per_group = _IOS_HEX_GROUPS_PER_LINE
+    hex_lines = [
+        '  ' + ' '.join(groups[i:i + lines_per_group])
+        for i in range(0, len(groups), lines_per_group)
+    ]
+    return ' \n '.join([*hex_lines])
+
+
+def _ensure_c9200cx_trustpoint():
+    """Installs DRAWBRIDGE_CA_CERT_PEM as a trusted IOS XE trustpoint so
+    `copy https://...` can validate Drawbridge's certificate instead of
+    blocking on an interactive accept/reject prompt it has no TTY to
+    answer, or failing outright — IOS XE's HTTPS client does not silently
+    accept an unverifiable cert. Called once, from main(), right after the
+    platform is confirmed as C9200CX — not per network call:
+    re-authenticating the same cert into the same trustpoint on every
+    request_provisioning()/report_status()/log_to_server() call is
+    redundant, one-time setup is all `copy https://...` ever needs for the
+    rest of the run.
+
+    Configuring the trustpoint alone isn't enough: confirmed on real
     C9200CX hardware that without `ip http client secure-trustpoint`, IOS
     XE's HTTP client validates `copy https://...` against the device's own
     `TP-self-signed-NNNNNNNNN` identity trustpoint instead of DRAWBRIDGE-CA,
     which never matches Drawbridge's cert and fails every fetch.
+
+    Deliberately does not use `crypto pki authenticate` at all (whether
+    paired with `enrollment terminal` or `enrollment url`) — confirmed on
+    real hardware that `cli.configure()`/`cli.configurep()` blocks until
+    the command it's given fully returns, and `crypto pki authenticate`
+    never returns on its own: it always ends in an interactive prompt
+    (pasting the cert itself under `enrollment terminal`, or accepting its
+    fingerprint under either mode) that a second, later call can never
+    actually deliver, since the first call is already blocked waiting for
+    it. See _pem_to_ios_cert_chain_block() — installing the CA cert
+    directly as a `crypto pki certificate chain` block is pure declarative
+    config, so nothing after it is left waiting on further input. Matches
+    what any router's own saved config looks like for an already-trusted
+    trustpoint. Confirmed on real C9200CX hardware: this exact sequence
+    (trustpoint declaration, certificate chain block, secure-trustpoint),
+    run by hand at the console from a freshly-erased config, results in
+    `show crypto pki certificate` reporting `Status: Available` and
+    `copy https://...` succeeding — no `crypto pki authenticate`, no
+    interactive prompt, no reload needed.
+
+    `show crypto pki certificate <trustpoint> pem` will still report "The
+    specified trustpoint is not enrolled" — that's benign and expected, not
+    a sign this didn't work. "Enrolled" there refers to the *router*
+    having its own identity certificate issued by this CA (`crypto pki
+    enroll`, for proving the router's own identity to a peer, e.g. mutual
+    TLS) — a completely different operation from authenticating a CA cert
+    as a trust anchor for validating *someone else's* certificate, which is
+    all `copy https://...` ever needs. Drawbridge never asks devices for a
+    client certificate, so the router never needs an identity cert of its
+    own; `Status: Available` on the CA certificate itself (`show crypto pki
+    certificate <trustpoint>`, no `pem`) is the field that actually matters
+    here.
     """
-    cli.configure(f'crypto pki trustpoint {TRUSTPOINT_NAME}')
-    cli.cli('enrollment terminal')
-    cli.cli('revocation-check none')
-    cli.cli('exit')
-    cli.configure(f'crypto pki authenticate {TRUSTPOINT_NAME}')
-    cli.cli(DRAWBRIDGE_CA_CERT_PEM)
-    cli.execute('quit')
-    cli.execute('yes')
-    cli.configure(f'ip http client secure-trustpoint {TRUSTPOINT_NAME}')
+    assert DRAWBRIDGE_CA_CERT_PEM is not None  # synced by drawbridge/tls.py before real use
+
+    command = f"""crypto pki trustpoint {TRUSTPOINT_NAME}
+    enrollment terminal
+    revocation-check none
+    exit
+    """
+    print(f'> Sending command: {command}')
+    cli.configurep(command)
+
+    command = f"""crypto pki certificate chain {TRUSTPOINT_NAME}
+    certificate ca 01
+    {_pem_to_ios_cert_chain_block(DRAWBRIDGE_CA_CERT_PEM)}
+    quit
+    """
+    print(f'> Sending command: {command}')
+    cli.configurep(command)
+
+    command = f'ip http client secure-trustpoint {TRUSTPOINT_NAME}'
+    print(f'> Sending command: {command}')
+    cli.configurep(command)
 
 
 def request_provisioning():
@@ -264,10 +355,10 @@ def _put_json(url, payload, filename):
     direct HTTP request instead.
     """
     if DEVICE.is_c9200cx:
-        with open('/bootflash/' + filename, 'w') as f:
+        with open('/bootflash/guest-share/' + filename, 'w') as f:
             json.dump(payload, f)
         # IOS XE's 'copy' to an HTTP(S) destination issues a PUT (see decisions.md).
-        cli.execute(f'copy flash:{filename} {url}')
+        cli.execute(f'copy flash:/guest-share/{filename} {url}')
         return
 
     context = ssl.create_default_context(cadata=DRAWBRIDGE_CA_CERT_PEM)
@@ -286,6 +377,7 @@ def log_to_server(message):
     """Reports one log line to Drawbridge's device-log feed (see
     docs/logging.md) — best-effort, same transport as report_status."""
     url = f'{DRAWBRIDGE_BASE_URL}/device-logs'
+    LOGGER.info(f'Sending message: "{message}" to {url}')
     _put_json(url, {'serial': DEVICE.serial, 'message': message}, 'devicelog.json')
 
 
@@ -302,7 +394,7 @@ def main():
 
     LOGGER = _setup_logger(name=f'{DEVICE.serial}-logger', platform=DEVICE.model, log_file_name=f'{DEVICE.serial}.log')
 
-    LOGGER.info("\n")
+    print()
 
     if DEVICE.is_c9200cx:
         LOGGER.info(f'Platform is {DEVICE.model}. Manually inserting trustpoint name for TLS')
