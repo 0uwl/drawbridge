@@ -38,12 +38,11 @@ DRAWBRIDGE_PORT = 8080
 DRAWBRIDGE_LOG_PORT = 10514
 DRAWBRIDGE_BASE_URL = f'https://{DRAWBRIDGE_HOST}:{DRAWBRIDGE_PORT}/api/v1'
 
-# Must be set to this deployment's actual Drawbridge TLS cert (or its
-# issuing CA) before this script is used against a device with `cli`
-# present. A self-signed cert is a valid trust anchor on its own; no real
-# CA hierarchy required. Used two ways: fed to `crypto pki authenticate` on
-# C9200CX (no network stack of its own, see below), and as ssl's `cadata`
-# on other real platforms (which do have their own network stack).
+# The following must be set to this deployment's actual Drawbridge TLS cert (or its
+# issuing CA) before this script is used. A self-signed cert is a valid trust anchor 
+# on its own; no real CA hierarchy required. Used two ways: fed to 
+# `crypto pki authenticate` on C9200CX (no network stack of its own, see below), 
+# and as ssl's `cadata` on other platforms (which do have their own network stack).
 #
 # Auto-synced by drawbridge/tls.py after every Drawbridge restart (see
 # docs/deployment.md, "TLS") to match whatever cert Drawbridge is actually
@@ -59,6 +58,7 @@ C9200CX_PLATFORM = 'C9200CX'
 TRUSTPOINT_NAME = 'DRAWBRIDGE-CA'
 
 STATUS_FILENAME = 'status.json'
+FACTS_FILENAME = 'facts.json'
 
 PROVISION_REQUEST_FILENAME = 'provision-request.json'
 PROVISION_REQUEST_FLASH_PATH = 'flash:guest-share/' + PROVISION_REQUEST_FILENAME
@@ -92,30 +92,18 @@ class Device:
 DEVICE: Device
 
 
-def get_serial():
-    """Serial via 'show version'. Returns None if the field isn't found."""
-    output = cli.execute('show version')
-    match = re.search(r'[Ss]erial [Nn]umber\s*:\s*(\S+)', output)
-    if match:
-        return match.group(1)
-    return None
+def _setup_logger(name: str, log_file_name: str, level=logging.INFO):
+    """Setup the logger for the ZTP script. Creates handlers for stdout, file and syslog. 
+    Syslog is not used for C9200CX series since they cannot communicate with the device network stack
 
+    Args:
+        name (str): The logger name shown in the message
+        log_file_name (str): The name of the local log file. Always stored in /bootflash/guest-share
+        level (_type_, optional): Logging level of each handler. Defaults to logging.INFO.
 
-def get_platform():
-    """Platform/PID via 'show version' - parsed, not probed: a genuine
-    network failure and "no network stack at all" must not look the same
-    (see the two-way dispatch in request_provisioning/report_status
-    below). Returns None if the field isn't found. Field name unverified
-    against real hardware output - same posture as other C9200CX-dependent
-    parsing in this file, see docs/decisions.md."""
-    output = cli.execute('show version')
-    match = re.search(r'[Mm]odel [Nn]umber\s*:\s*(\S+)', output)
-    if match:
-        return match.group(1)
-    return None
-
-
-def _setup_logger(name: str, platform: str, log_file_name: str, level=logging.INFO):
+    Returns:
+        _type_: The newly created logger
+    """
     # Create logger with the given name
     new_logger = logging.getLogger(name)
     new_logger.setLevel(level)
@@ -189,27 +177,14 @@ def _pem_to_ios_cert_chain_block(pem: str) -> str:
     cert (see `show running-config` on any router with one configured) -
     the exact hex-dump format (4-byte/8-hex-char groups, 7 per line,
     2-space-indented, terminated with `quit`) IOS renders and re-parses
-    certs in. PEM is base64-encoded DER with header/footer lines - no
-    crypto library needed to strip down to the raw DER bytes this needs.
+    certs in.
 
     The `certificate ca <serial>` label below is an arbitrary hex token,
     not the certificate's real X.509 serial number - it only exists to
-    distinguish multiple entries within one trustpoint's chain. Hardcoded
-    rather than a parameter: this only ever installs a single CA cert into
-    a single trustpoint, so there's nothing for a caller to vary it for,
-    and nothing downstream reads it back.
+    distinguish multiple entries within one trustpoint's chain.
 
     Feeding this block straight into config mode installs the cert as
-    already-trusted with no further step - no `crypto pki authenticate`,
-    so no interactive fingerprint-accept prompt afterward either. That
-    matters here specifically: `cli.configure()`/`cli.configurep()` block
-    until a command fully returns, so anything needing a follow-up
-    interactive response (accepting a paste, answering yes/no) can never
-    actually get one - the module has already blocked on the first call
-    by the time a second call could supply it. `crypto pki authenticate`
-    always ends in exactly that kind of prompt regardless of enrollment
-    mode (terminal or url), which is why this sidesteps it entirely rather
-    than trying to answer it.
+    already-trusted with no further step needed.
     """
     body = ''.join(line for line in pem.strip().splitlines() if not line.startswith('-----'))
     hex_bytes = base64.b64decode(body).hex().upper()
@@ -223,10 +198,8 @@ def _pem_to_ios_cert_chain_block(pem: str) -> str:
 
 
 def _ensure_c9200cx_trustpoint():
-    """Installs DRAWBRIDGE_CA_CERT_PEM as a trusted IOS XE trustpoint so
-    `copy https://...` can validate Drawbridge's certificate instead of
-    blocking on an interactive accept/reject prompt it has no TTY to
-    answer, or failing outright
+    """Installs DRAWBRIDGE_CA_CERT_PEM as a trusted IOS XE trustpoint on a C9200CX
+    so that`copy https://...` can validate Drawbridge's certificate or fail outright
     """
     assert DRAWBRIDGE_CA_CERT_PEM is not None  # synced by drawbridge/tls.py before real use
 
@@ -253,9 +226,8 @@ def _ensure_c9200cx_trustpoint():
 
 def request_provisioning():
     """Phones home to Drawbridge before doing anything else. 
-    GET with query-string params, not POST with a JSON body: 
-    IOS XE's 'copy' primitive (the only network I/O available on
-    C9200CX, per the isolation note below) can't attach a request body,
+    GET with query-string params. The only network I/O available on the
+    C9200CX is IOS XE's 'copy' primitive which can't attach a request body,
     only a URL and a destination file. Returns the parsed decision dict, or
     None if denied/unreachable.
     """
@@ -321,10 +293,39 @@ def _put_json(url, payload, filename):
     urllib.request.urlopen(request, timeout=10, context=context)
 
 
-def report_status(payload):
+def report_new_state(state):
+    """Reports new provisioning state to Drawbridge
+
+    Args:
+        state (str): The new state sent to Drawbridge /device-logs endpoint
+    """
+    url = f'{DRAWBRIDGE_BASE_URL}/device-logs'
+    payload = {
+        'serial': DEVICE.serial,
+        'ip': DEVICE.ip,
+        'state': state
+    }
+
+
+def report_complete(payload):
     """Reports completion to Drawbridge."""
     url = f'{DRAWBRIDGE_BASE_URL}/provision-complete'
     _put_json(url, payload, STATUS_FILENAME)
+
+
+def report_device_facts():
+    """Reports the device's own facts (model, version, mac, ip - see
+    Device.to_dict()) to Drawbridge so they can be recorded on the active
+    ProvisioningSession row (see docs/decisions.md, "Facts-first
+    provisioning"). Only meaningful once a session exists, so this is called
+    from main() after request_provisioning() has already approved the
+    device - never before. Same _put_json transport as report_complete/
+    log_to_server: on C9200CX, Guestshell can't attach a request body to a
+    direct call, so the payload is written to flash and delivered via IOS
+    XE's own 'copy' primitive issuing the PUT; other platforms PUT directly.
+    """
+    url = f'{DRAWBRIDGE_BASE_URL}/provision-request/facts'
+    _put_json(url, DEVICE.to_dict(), FACTS_FILENAME)
 
 
 def log_to_server(message):
@@ -341,7 +342,7 @@ def main():
     model, serial, version, ip, mac = _get_device_info()
 
     DEVICE = Device(serial=serial or 'unknown', model=model, version=version, mac=mac, ip=ip)
-    LOGGER = _setup_logger(name=f'{DEVICE.serial}-logger', platform=DEVICE.model, log_file_name=f'{DEVICE.serial}.log')
+    LOGGER = _setup_logger(name=f'{DEVICE.serial}-logger', log_file_name=f'{DEVICE.serial}.log')
 
     if serial is None:
         log_to_server('ZTP script failed. No serial could be parsed from device')
@@ -361,8 +362,11 @@ def main():
     if not approved:
         return  # denied or unreachable - exit cleanly, no completion callback
 
+    report_device_facts()
+    log_to_server('Reported device facts to Drawbridge')
+
     payload = build_status_payload()
-    report_status(payload)
+    report_complete(payload)
     log_to_server('Provisioning complete')
 
 

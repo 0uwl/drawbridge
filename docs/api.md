@@ -19,6 +19,7 @@ served over plain HTTP on `:8090`, not through this Flask app at all. See
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/v1/provision-request` | Called by the ZTP script's phone-home step on boot; approves or denies provisioning |
+| PUT/POST | `/api/v1/provision-request/facts` | Called by the ZTP script once its session is approved, to self-report device facts (`model`, `version`) onto the active `ProvisioningSession` row — see "`/api/v1/provision-request/facts` contract" below |
 | GET | `/api/v1/devices` | List devices currently pending provisioning |
 | POST | `/api/v1/devices` | Register a new device (serial + optional metadata) |
 | PUT | `/api/v1/devices/<serial>` | Edit an existing allowlist entry (`mac`, `description`, `image`, `config_file`). `404 device_not_found` if the serial doesn't already exist — this route never creates one |
@@ -63,7 +64,8 @@ Every `/api/devices`, `/api/log`, `/api/users`, `/api/settings/*`, and
 `GET /files/<type>/<filename>` download endpoints are unauthenticated so that
 IOS XE devices can fetch images and configs during ZTP without
 credentials; access is restricted at the network level (provisioning VLAN).
-`/api/provision-request`, `/api/provision-complete`, `PUT/POST
+`/api/provision-request`, `PUT/POST /api/provision-request/facts`,
+`/api/provision-complete`, `PUT/POST
 /api/device-logs`, and `POST /api/kea-logs` are all open routes called by
 devices or rsyslog on their behalf (never operators) — gated by the
 serial/IP lookup itself (and, at the perimeter, network isolation), not by
@@ -96,3 +98,31 @@ fallback matching is needed here). Responses:
   file to fetch); a `ProvisioningSession` row is created
 - `404 device_not_found` → unknown serial; script exits, does not proceed
 - `422 missing_parameter` → `serial` missing from the query string
+
+## `/api/v1/provision-request/facts` contract
+
+Called by the ZTP script (`report_device_facts()`) right after
+`/provision-request` approves it, and before it does anything else — unlike
+the GET above, this one carries a JSON body, so it doesn't need to be
+squeezed into a query string. On C9200CX this still goes through IOS XE's
+`copy` primitive (writing the payload to flash first, see
+[decisions.md](decisions.md) "C9200CX network stack isolation"), which
+issues a PUT; other platforms PUT directly:
+
+```
+PUT /api/v1/provision-request/facts
+{"serial": "FJC2517X0AB", "model": "C9200CX-12P-2X2G", "version": "17.9.1", "mac": "aa:bb:cc:dd:ee:ff", "ip": "192.168.100.50"}
+```
+
+Only `serial`, `model`, and `version` are read — `mac`/`ip` are already
+pinned on the session from `/provision-request` and ignored here. `model`
+and `version` are written onto the active `ProvisioningSession` row (see
+[database.md](database.md)) if present in the body, left unchanged
+otherwise. Responses:
+- `200 OK` → facts recorded
+- `404 device_not_active` → no active `ProvisioningSession` for this serial
+  (i.e. called before `/provision-request` approves one, or after
+  `/provision-complete` already deleted it)
+- `409 session_mismatch` → caller's IP doesn't match the session's pinned IP
+- `422 missing_parameter` → `serial` missing from the request body
+- `422 empty_request_body` → body missing or not valid JSON

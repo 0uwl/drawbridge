@@ -126,18 +126,24 @@
 - **Kea Control Agent on 127.0.0.1:8081.** Default Kea port is 8080, which
   conflicts with Drawbridge. Control Agent is bound to loopback only.
 
-- **Facts-first provisioning is deferred, not rejected.** An idea was raised
-  for a two-phase flow: a small facts-collector script fetched first, which
-  reports device facts (e.g. version/platform) to Drawbridge and gets back
-  the appropriate provisioning script to hand off to, rather than one static
-  script for all devices. This is a reasonable pattern for heterogeneous
-  fleets, but it's real Day-0 provisioning logic — the same category the
-  alpha `ztp_script.py` stub deliberately excludes (see alpha.md step 5) — and
-  it requires schema/API additions alpha doesn't have: a version/platform
-  field on `Device`, and a new endpoint (or facts parameter) for the
-  fetch-then-select round trip, plus a second HTTPS/cert-validation hop.
-  Scope this once real per-device provisioning logic is built and tested
-  against hardware, not before.
+- **Facts-first provisioning: self-reporting only, no script hand-off.**
+  An earlier version of this idea proposed a full two-phase flow — a
+  facts-collector script fetched first, reports device facts, and gets back
+  a *different* script to hand off to for heterogeneous fleets. That's real
+  Day-0 provisioning logic, the same category the alpha `ztp_script.py` stub
+  deliberately excludes (see alpha.md step 5), and per-device script
+  selection was itself explicitly removed, not deferred (see below) — so
+  the hand-off half stays out of scope. What is built: after
+  `/provision-request` approves a session, the script self-reports its own
+  `model`/`version` via `PUT /provision-request/facts` (see
+  [api.md](api.md)), recorded onto that `ProvisioningSession` row (see
+  [database.md](database.md)) purely for operator visibility (Active
+  Sessions UI) — nothing server-side branches on it yet. Deliberately kept
+  on `ProvisioningSession`, not `Device`: transient like the rest of that
+  row, gone the moment the session is, consistent with "Drawbridge is not
+  an inventory system" above. No second HTTPS/cert-validation hop either —
+  it reuses the same session-pinned transport (`_put_json`) `report_status`/
+  `log_to_server` already use.
 
 - **Per-device script selection removed (v0.3.1), not deferred like
   facts-first above — it never actually drove anything.** `Device.script`,

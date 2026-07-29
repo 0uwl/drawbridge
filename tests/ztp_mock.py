@@ -41,6 +41,15 @@ def request_provisioning(serial, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
     return response.json()
 
 
+def report_device_facts(serial, model='TEST-PLATFORM', version='17.9.1', base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
+    """Mirrors scripts/ztp_script.py's report_device_facts()."""
+    requests.put(
+        f'{base_url}/provision-request/facts',
+        json={'serial': serial, 'model': model, 'version': version},
+        verify=verify, timeout=10,
+    )
+
+
 def build_status_payload(serial):
     return {
         'serial': serial,
@@ -74,6 +83,9 @@ def main(serial, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
     log_to_server(serial, 'provision-request: ' + ('approved' if approved else 'denied/unreachable'), base_url, verify)
     if not approved:
         return
+
+    report_device_facts(serial, base_url=base_url, verify=verify)
+    log_to_server(serial, 'reported device facts', base_url, verify)
 
     payload = build_status_payload(serial)
     report_status(payload, base_url, verify)

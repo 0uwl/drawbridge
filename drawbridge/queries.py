@@ -180,6 +180,24 @@ def create_provisioning_session(
     return ps
 
 
+def update_session_facts(session: Session, *, serial: str, model: str | None = None, version: str | None = None) -> ProvisioningSession | None:
+    """Records the device-reported model/version onto an already-active
+    session (see PUT /provision-request/facts in leases.py) - a session must
+    already exist, this never creates one. A None field is left as-is rather
+    than overwritten, same "don't treat an omitted field as a claim" posture
+    as create_provisioning_session's mac/ip handling. Counts as device
+    activity like touch_session above."""
+    ps = get_provisioning_session(session, serial)
+    if ps is None:
+        return None
+    if model is not None:
+        ps.model = model
+    if version is not None:
+        ps.version = version
+    ps.last_seen_at = utcnow_iso()
+    return ps
+
+
 def delete_provisioning_session(session: Session, serial: str) -> bool:
     ps = session.get(ProvisioningSession, serial)
     if ps is None:

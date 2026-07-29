@@ -103,7 +103,7 @@ Environment=SECRET_KEY=CHANGE_ME_use_openssl_rand_hex_32
 #Environment=TLS_CERT_PATH=/app/data/tls/cert.pem
 #Environment=TLS_KEY_PATH=/app/data/tls/key.pem
 
-# Comma-separated IPs/hostnames devices actually reach this deployment on
+# Comma-separated IPs/hostnames that devices reach this deployment on
 # (e.g. 192.168.100.1), added to the self-signed cert's SAN alongside the
 # always-present 127.0.0.1/localhost. Without an entry matching the address
 # in `copy https://<address>:8080/...`, IOS XE's HTTPS client fails

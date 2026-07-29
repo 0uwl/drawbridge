@@ -245,6 +245,49 @@ def test_touch_session_is_a_noop_when_no_session_exists(session):
     session.commit()
 
 
+def test_update_session_facts_sets_model_and_version(session):
+    queries.add_device(session, serial='SN1')
+    queries.create_provisioning_session(session, serial='SN1')
+    session.commit()
+
+    ps = queries.update_session_facts(session, serial='SN1', model='C9200CX-12P-2X2G', version='17.9.1')
+    session.commit()
+
+    assert ps.model == 'C9200CX-12P-2X2G'
+    assert ps.version == '17.9.1'
+
+
+def test_update_session_facts_returns_none_when_no_session_exists(session):
+    assert queries.update_session_facts(session, serial='UNKNOWN', model='m', version='v') is None
+
+
+def test_update_session_facts_leaves_unreported_field_unchanged(session):
+    queries.add_device(session, serial='SN1')
+    queries.create_provisioning_session(session, serial='SN1')
+    session.commit()
+    queries.update_session_facts(session, serial='SN1', model='C9200CX-12P-2X2G', version='17.9.1')
+    session.commit()
+
+    ps = queries.update_session_facts(session, serial='SN1', model='C9200CX-24P-4X', version=None)
+    session.commit()
+
+    assert ps.model == 'C9200CX-24P-4X'
+    assert ps.version == '17.9.1'
+
+
+def test_update_session_facts_bumps_last_seen_at(session):
+    queries.add_device(session, serial='SN1')
+    ps = queries.create_provisioning_session(session, serial='SN1')
+    session.commit()
+    ps.last_seen_at = '2000-01-01T00:00:00.000000+00:00'
+    session.commit()
+
+    queries.update_session_facts(session, serial='SN1', model='m', version='v')
+    session.commit()
+
+    assert ps.last_seen_at > '2000-01-01T00:00:00.000000+00:00'
+
+
 # User queries
 
 def test_get_user_by_username_and_id(session):

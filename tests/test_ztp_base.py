@@ -172,6 +172,18 @@ def test_report_status_uses_https_and_versioned_api_path(ztp_script_mock):
         ztp_script_mock.DRAWBRIDGE_HOST, ztp_script_mock.DRAWBRIDGE_PORT)
 
 
+def test_report_device_facts_uses_https_and_versioned_api_path(ztp_script_mock):
+    _set_device(ztp_script_mock)
+    with patch('urllib.request.urlopen') as urlopen:
+        ztp_script_mock.report_device_facts()
+
+    request_obj = urlopen.call_args[0][0]
+    assert request_obj.full_url == 'https://{0}:{1}/api/v1/provision-request/facts'.format(
+        ztp_script_mock.DRAWBRIDGE_HOST, ztp_script_mock.DRAWBRIDGE_PORT)
+    body = json.loads(request_obj.data)
+    assert body == ztp_script_mock.DEVICE.to_dict()
+
+
 def test_log_to_server_uses_https_and_versioned_api_path(ztp_script_mock):
     _set_device(ztp_script_mock, serial='TEST-SERIAL-0001')
     with patch('urllib.request.urlopen') as urlopen:
@@ -187,14 +199,34 @@ def test_log_to_server_uses_https_and_versioned_api_path(ztp_script_mock):
 def test_main_calls_log_to_server_at_start_request_and_completion_when_approved(ztp_script_mock):
     with patch('urllib.request.urlopen', _urlopen_returning({'success': True})), \
          patch.object(ztp_script_mock, 'report_status'), \
+         patch.object(ztp_script_mock, 'report_device_facts'), \
          patch.object(ztp_script_mock, 'log_to_server') as log_to_server:
         ztp_script_mock.main()
 
-    assert log_to_server.call_count == 3
+    assert log_to_server.call_count == 4
     messages = [call.args[0] for call in log_to_server.call_args_list]
     assert messages[0] == 'Provisioning started. Requesting permission from Drawbridge'
     assert messages[1] == 'Provision request: approved'
-    assert messages[2] == 'Provisioning complete'
+    assert messages[2] == 'Reported device facts to Drawbridge'
+    assert messages[3] == 'Provisioning complete'
+
+
+def test_main_reports_device_facts_when_approved(ztp_script_mock):
+    with patch('urllib.request.urlopen', _urlopen_returning({'success': True})), \
+         patch.object(ztp_script_mock, 'report_status'), \
+         patch.object(ztp_script_mock, 'report_device_facts') as report_device_facts:
+        ztp_script_mock.main()
+
+    report_device_facts.assert_called_once()
+
+
+def test_main_does_not_report_device_facts_when_denied(ztp_script_mock):
+    with patch('urllib.request.urlopen', _urlopen_returning({'success': False})), \
+         patch.object(ztp_script_mock, 'report_status'), \
+         patch.object(ztp_script_mock, 'report_device_facts') as report_device_facts:
+        ztp_script_mock.main()
+
+    report_device_facts.assert_not_called()
 
 
 def test_main_calls_log_to_server_at_start_and_request_only_when_denied(ztp_script_mock):
@@ -317,6 +349,7 @@ def test_main_sets_up_trustpoint_exactly_once_for_c9200cx(ztp_script_mock, fake_
     with patch.object(ztp_script_mock, '_ensure_c9200cx_trustpoint') as trustpoint, \
          patch.object(ztp_script_mock, 'log_to_server'), \
          patch.object(ztp_script_mock, 'request_provisioning', return_value={'success': True}), \
+         patch.object(ztp_script_mock, 'report_device_facts'), \
          patch.object(ztp_script_mock, 'report_status'):
         ztp_script_mock.main()
 
@@ -331,6 +364,7 @@ def test_main_sets_up_trustpoint_before_any_other_call_for_c9200cx(ztp_script_mo
          patch.object(ztp_script_mock, 'log_to_server', side_effect=lambda *a, **k: call_order.append('log_to_server')), \
          patch.object(ztp_script_mock, 'request_provisioning',
                       side_effect=lambda *a, **k: call_order.append('request_provisioning') or {'success': True}), \
+         patch.object(ztp_script_mock, 'report_device_facts', side_effect=lambda *a, **k: call_order.append('report_device_facts')), \
          patch.object(ztp_script_mock, 'report_status', side_effect=lambda *a, **k: call_order.append('report_status')):
         ztp_script_mock.main()
 

@@ -39,6 +39,8 @@ class ProvisioningSession(Base):
     ip: Mapped[str | None]
     image: Mapped[str | None]        # copied from the Device row's assignment at approval time
     config_file: Mapped[str | None]  # copied from the Device row's assignment at approval time
+    model: Mapped[str | None]        # self-reported via PUT /provision-request/facts
+    version: Mapped[str | None]      # self-reported via PUT /provision-request/facts
     state: Mapped[str]               # 'lease_approved', 'script_fetched', 'downloading',
                                      # 'updating_software', 'rebooting', 'configuring', 'error'
     approved_at: Mapped[str]
@@ -233,7 +235,10 @@ deleted as soon as `/api/provision-complete` fires (see
 via an operator's explicit cancel once it's stale (see "Stale sessions"
 above). What persists past that point is `ProvisioningLog`: when a device
 was provisioned and what image/config file it received, for audit and
-troubleshooting, not asset tracking.
+troubleshooting, not asset tracking. `ProvisioningSession.model`/`.version`
+(self-reported by the ZTP script via `PUT /provision-request/facts`, see
+[api.md](api.md)) follow the same rule — they live only as long as the
+session does and are never copied into `ProvisioningLog`.
 
 - Retention is controlled by the `Setting` row keyed `log_retention_days` —
   an **admin-configurable, DB-backed setting** via `GET`/`PUT

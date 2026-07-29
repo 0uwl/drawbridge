@@ -48,6 +48,16 @@ def test_report_status_uses_https_and_versioned_api_path():
     assert put.call_args.kwargs['json'] == {'serial': 'TEST-SERIAL-0001'}
 
 
+def test_report_device_facts_uses_https_and_versioned_api_path():
+    with patch('requests.put', return_value=_response()) as put:
+        ztp_mock.report_device_facts('TEST-SERIAL-0001', model='C9200CX-12P-2X2G', version='17.9.1')
+
+    assert put.call_args[0][0] == f'{ztp_mock.DRAWBRIDGE_BASE_URL}/provision-request/facts'
+    assert put.call_args.kwargs['json'] == {
+        'serial': 'TEST-SERIAL-0001', 'model': 'C9200CX-12P-2X2G', 'version': '17.9.1',
+    }
+
+
 def test_log_to_server_uses_https_and_versioned_api_path():
     with patch('requests.put', return_value=_response()) as put:
         ztp_mock.log_to_server('TEST-SERIAL-0001', 'hello')
@@ -76,15 +86,38 @@ def test_main_does_not_report_status_when_denied():
 
 def test_main_calls_log_to_server_at_start_request_and_completion_when_approved():
     with patch('requests.get', return_value=_response(200, {'success': True})), \
+         patch('requests.put'), \
          patch.object(ztp_mock, 'report_status'), \
+         patch.object(ztp_mock, 'report_device_facts'), \
          patch.object(ztp_mock, 'log_to_server') as log_to_server:
         ztp_mock.main('TEST-SERIAL-0001')
 
-    assert log_to_server.call_count == 3
+    assert log_to_server.call_count == 4
     messages = [call.args[1] for call in log_to_server.call_args_list]
     assert messages[0] == 'provisioning started'
     assert messages[1] == 'provision-request: approved'
-    assert messages[2] == 'provisioning complete'
+    assert messages[2] == 'reported device facts'
+    assert messages[3] == 'provisioning complete'
+
+
+def test_main_reports_device_facts_when_approved():
+    with patch('requests.get', return_value=_response(200, {'success': True})), \
+         patch('requests.put'), \
+         patch.object(ztp_mock, 'report_status'), \
+         patch.object(ztp_mock, 'report_device_facts') as report_device_facts:
+        ztp_mock.main('TEST-SERIAL-0001')
+
+    report_device_facts.assert_called_once()
+
+
+def test_main_does_not_report_device_facts_when_denied():
+    with patch('requests.get', return_value=_response(404)), \
+         patch('requests.put'), \
+         patch.object(ztp_mock, 'report_status'), \
+         patch.object(ztp_mock, 'report_device_facts') as report_device_facts:
+        ztp_mock.main('TEST-SERIAL-0001')
+
+    report_device_facts.assert_not_called()
 
 
 def test_main_calls_log_to_server_at_start_and_request_only_when_denied():

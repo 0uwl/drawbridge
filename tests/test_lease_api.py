@@ -134,6 +134,69 @@ def test_provision_request_omitting_mac_on_repeat_call_is_not_a_mismatch(client,
         assert session.mac == 'aa:aa:aa:aa:aa:aa'
 
 
+# PUT/POST /api/v1/provision-request/facts
+
+def test_provision_request_facts_known_active_session_returns_200_and_records_facts(client, app, active_session):
+    response = client.put(
+        f'{BASE}/provision-request/facts',
+        json={'serial': active_session.serial, 'model': 'C9200CX-12P-2X2G', 'version': '17.9.1'},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()['success'] is True
+
+    with app.app_context():
+        ps = get_session().get(ProvisioningSession, active_session.serial)
+        assert ps.model == 'C9200CX-12P-2X2G'
+        assert ps.version == '17.9.1'
+
+
+def test_provision_request_facts_unknown_serial_returns_404(client):
+    response = client.put(f'{BASE}/provision-request/facts', json={'serial': 'UNKNOWN-0001', 'model': 'm'})
+
+    assert response.status_code == 404
+    assert response.get_json()['error'] == 'device_not_active'
+
+
+def test_provision_request_facts_missing_serial_returns_422(client):
+    response = client.put(f'{BASE}/provision-request/facts', json={'model': 'm'})
+
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'missing_parameter'
+
+
+def test_provision_request_facts_empty_body_returns_422(client, active_session):
+    response = client.put(
+        f'{BASE}/provision-request/facts', data='not json', content_type='application/json',
+    )
+
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'empty_request_body'
+
+
+def test_provision_request_facts_rejects_mismatched_ip(client, app, active_session):
+    response = client.put(
+        f'{BASE}/provision-request/facts',
+        json={'serial': active_session.serial, 'model': 'm'},
+        environ_overrides={'REMOTE_ADDR': '10.0.0.99'},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()['error'] == 'session_mismatch'
+
+    with app.app_context():
+        ps = get_session().get(ProvisioningSession, active_session.serial)
+        assert ps.model is None
+
+
+def test_provision_request_facts_accepts_post_too(client, active_session):
+    response = client.post(
+        f'{BASE}/provision-request/facts', json={'serial': active_session.serial, 'model': 'm', 'version': 'v'},
+    )
+
+    assert response.status_code == 200
+
+
 # PUT/POST /api/v1/provision-complete
 
 def test_provision_complete_known_active_session_returns_200(client, app, active_session):

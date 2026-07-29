@@ -67,6 +67,14 @@ class ProvisioningSession(Base):
     ip: Mapped[str | None]
     image: Mapped[str | None]        # copied from the Device row's assignment at approval time
     config_file: Mapped[str | None]  # copied from the Device row's assignment at approval time
+    # Self-reported by the ZTP script via PUT /provision-request/facts, once
+    # its own network I/O is available (unlike the initial GET
+    # /provision-request, which is limited to query-string params - see
+    # docs/decisions.md, "Facts-first provisioning"). Transient like the rest
+    # of this row: never copied into ProvisioningLog, gone as soon as the
+    # session is - not retained the way Device's allowlist fields are.
+    model: Mapped[str | None]
+    version: Mapped[str | None]
     state: Mapped[str]               # one of PROVISIONING_STATES above
     approved_at: Mapped[str] = mapped_column(default=utcnow_iso)
     # Distinct from approved_at (set once, at creation): bumped on every
@@ -86,6 +94,8 @@ class ProvisioningSession(Base):
             'ip': self.ip,
             'image': self.image,
             'config_file': self.config_file,
+            'model': self.model,
+            'version': self.version,
             'state': self.state,
             'approved_at': self.approved_at,
             'last_seen_at': self.last_seen_at,

@@ -7,6 +7,7 @@ from drawbridge.queries import (
     delete_provisioning_session,
     get_device,
     get_provisioning_session,
+    update_session_facts,
 )
 from drawbridge.utils import error_response, success_response
 
@@ -49,6 +50,40 @@ def create_blueprint():
         session.commit()
 
         return success_response(f'{serial} approved', payload=device.as_dict())
+
+    @bp.route('/provision-request/facts', methods=['PUT', 'POST'])
+    def provision_request_facts():
+        """Called by the ZTP script once it has an approved session (see
+        scripts/ztp_script.py's report_device_facts()) to report device
+        facts (model, version) the initial GET /provision-request can't
+        carry - a JSON body, sent the same way as /provision-complete: PUT
+        via IOS XE's `copy` primitive on C9200CX, direct PUT elsewhere. Open
+        route, same posture as /provision-request and /provision-complete -
+        gated by the active session + IP match, not caller identity."""
+        # force=True: IOS XE `copy` sends PUT without Content-Type: application/json
+        data = request.get_json(force=True, silent=True)
+        if data is None:
+            return error_response('Empty request body', 'empty_request_body', code=422)
+
+        serial = data.get('serial')
+        if serial is None:
+            return error_response('Request body is missing required parameter serial', 'missing_parameter', code=422)
+
+        session = get_session()
+        active = get_provisioning_session(session, serial)
+
+        if active is None:
+            return error_response(f'{serial} is not in active provisioning', 'device_not_active', code=404)
+
+        if active.ip != request.remote_addr:
+            return error_response(
+                f'{serial} request does not match its active session', 'session_mismatch', code=409, silent=True,
+            )
+
+        update_session_facts(session, serial=serial, model=data.get('model'), version=data.get('version'))
+        session.commit()
+
+        return success_response(f'{serial} facts recorded')
 
     @bp.route('/provision-complete', methods=['PUT', 'POST'])
     def provision_complete():
