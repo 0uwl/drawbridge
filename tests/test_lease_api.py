@@ -4,9 +4,22 @@ import pytest
 
 from drawbridge import create_app
 from drawbridge.db import get_session
-from drawbridge.models import Device, DeviceLogEntry, ProvisioningLog, ProvisioningSession
+from drawbridge.models import Device, DeviceLogEntry, ProvisioningLog, ProvisioningSession, ZTPFile
 
 BASE = '/api/v1'
+
+# Matches the `device` fixture's Device.version below, so most tests exercise
+# the "device is already at its desired version" path (image omitted from
+# the response) without needing a ZTPFile fixture too. Tests that actually
+# exercise the upgrade decision set their own versions explicitly.
+CURRENT_VERSION = '17.9.1'
+
+
+def _request(client, serial, version=CURRENT_VERSION, mac=None, **kwargs):
+    query_string = {'serial': serial, 'version': version}
+    if mac is not None:
+        query_string['mac'] = mac
+    return client.get(f'{BASE}/provision-request', query_string=query_string, **kwargs)
 
 
 @pytest.fixture()
@@ -15,7 +28,7 @@ def device(app):
         session = get_session()
         d = Device(
             serial='FJC2517X0AB', mac='aa:bb:cc:dd:ee:ff', added_by='operator',
-            image='cat9k_iosxe.SPA.bin', config_file='base.cfg',
+            version=CURRENT_VERSION, config_file='base.cfg',
         )
         session.add(d)
         session.commit()
@@ -28,7 +41,7 @@ def active_session(app, device):
         session = get_session()
         ps = ProvisioningSession(
             serial=device.serial, mac=device.mac, ip='127.0.0.1', state='lease_approved',
-            image=device.image, config_file=device.config_file,
+            image=None, config_file=device.config_file,
         )
         session.add(ps)
         session.commit()
@@ -38,7 +51,7 @@ def active_session(app, device):
 # GET /api/v1/provision-request
 
 def test_provision_request_known_serial_returns_200_and_creates_session(client, app, device):
-    response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial})
+    response = _request(client, device.serial)
 
     assert response.status_code == 200
     assert response.get_json()['success'] is True
@@ -46,16 +59,16 @@ def test_provision_request_known_serial_returns_200_and_creates_session(client, 
     with app.app_context():
         ps = get_session().get(ProvisioningSession, device.serial)
         assert ps is not None
-        # ip is captured from the caller, image/config_file from the device's
+        # ip is captured from the caller; config_file from the device's
         # assignment — both are needed for the Active Sessions UI to show
         # anything other than "—" (see docs/frontend.md).
         assert ps.ip is not None
-        assert ps.image == device.image
+        assert ps.image is None  # device already reports its desired version
         assert ps.config_file == device.config_file
 
 
 def test_provision_request_unknown_serial_returns_404(client, app):
-    response = client.get(f'{BASE}/provision-request', query_string={'serial': 'UNKNOWN-0001'})
+    response = _request(client, 'UNKNOWN-0001')
 
     assert response.status_code == 404
     assert response.get_json()['error'] == 'device_not_found'
@@ -65,15 +78,22 @@ def test_provision_request_unknown_serial_returns_404(client, app):
 
 
 def test_provision_request_missing_serial_returns_422(client):
-    response = client.get(f'{BASE}/provision-request')
+    response = client.get(f'{BASE}/provision-request', query_string={'version': CURRENT_VERSION})
+
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'missing_parameter'
+
+
+def test_provision_request_missing_version_returns_422(client, device):
+    response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial})
 
     assert response.status_code == 422
     assert response.get_json()['error'] == 'missing_parameter'
 
 
 def test_provision_request_rejects_mismatched_mac_on_repeat_call(client, app, device):
-    client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
-    response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'bb:bb:bb:bb:bb:bb'})
+    _request(client, device.serial, mac='aa:aa:aa:aa:aa:aa')
+    response = _request(client, device.serial, mac='bb:bb:bb:bb:bb:bb')
 
     assert response.status_code == 409
     assert response.get_json()['error'] == 'session_mismatch'
@@ -84,8 +104,8 @@ def test_provision_request_rejects_mismatched_mac_on_repeat_call(client, app, de
 
 
 def test_provision_request_matching_repeat_call_still_succeeds(client, app, device):
-    client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
-    response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
+    _request(client, device.serial, mac='aa:aa:aa:aa:aa:aa')
+    response = _request(client, device.serial, mac='aa:aa:aa:aa:aa:aa')
 
     assert response.status_code == 200
 
@@ -95,14 +115,8 @@ def test_provision_request_matching_repeat_call_still_succeeds(client, app, devi
 
 
 def test_provision_request_rejects_mismatched_ip_on_repeat_call(client, app, device):
-    client.get(
-        f'{BASE}/provision-request', query_string={'serial': device.serial},
-        environ_overrides={'REMOTE_ADDR': '10.0.0.5'},
-    )
-    response = client.get(
-        f'{BASE}/provision-request', query_string={'serial': device.serial},
-        environ_overrides={'REMOTE_ADDR': '10.0.0.9'},
-    )
+    _request(client, device.serial, environ_overrides={'REMOTE_ADDR': '10.0.0.5'})
+    response = _request(client, device.serial, environ_overrides={'REMOTE_ADDR': '10.0.0.9'})
 
     assert response.status_code == 409
     assert response.get_json()['error'] == 'session_mismatch'
@@ -113,8 +127,8 @@ def test_provision_request_rejects_mismatched_ip_on_repeat_call(client, app, dev
 
 
 def test_provision_request_allows_filling_in_mac_not_previously_provided(client, app, device):
-    client.get(f'{BASE}/provision-request', query_string={'serial': device.serial})
-    response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
+    _request(client, device.serial)
+    response = _request(client, device.serial, mac='aa:aa:aa:aa:aa:aa')
 
     assert response.status_code == 200
 
@@ -124,14 +138,97 @@ def test_provision_request_allows_filling_in_mac_not_previously_provided(client,
 
 
 def test_provision_request_omitting_mac_on_repeat_call_is_not_a_mismatch(client, app, device):
-    client.get(f'{BASE}/provision-request', query_string={'serial': device.serial, 'mac': 'aa:aa:aa:aa:aa:aa'})
-    response = client.get(f'{BASE}/provision-request', query_string={'serial': device.serial})
+    _request(client, device.serial, mac='aa:aa:aa:aa:aa:aa')
+    response = _request(client, device.serial)
 
     assert response.status_code == 200
 
     with app.app_context():
         session = get_session().get(ProvisioningSession, device.serial)
         assert session.mac == 'aa:aa:aa:aa:aa:aa'
+
+
+# Upgrade decision — see docs/decisions.md, "Version-based image mapping"
+
+def test_provision_request_omits_image_when_already_at_desired_version(client, app, device):
+    response = _request(client, device.serial, version=CURRENT_VERSION)
+
+    assert response.status_code == 200
+    assert response.get_json()['payload']['image'] is None
+
+
+def test_provision_request_includes_image_when_version_differs(client, app, device):
+    with app.app_context():
+        session = get_session()
+        session.add(ZTPFile(file_type='image', filename='ios-xe-17.9.1.bin', size_bytes=1, sha256='a' * 64, version=CURRENT_VERSION))
+        session.commit()
+
+    response = _request(client, device.serial, version='17.0.0')
+
+    assert response.status_code == 200
+    assert response.get_json()['payload']['image'] == 'ios-xe-17.9.1.bin'
+
+    with app.app_context():
+        ps = get_session().get(ProvisioningSession, device.serial)
+        assert ps.image == 'ios-xe-17.9.1.bin'
+
+
+def test_provision_request_denies_when_desired_version_has_no_mapped_image(client, app, device):
+    # device.version (CURRENT_VERSION) has no ZTPFile mapped to it, and the
+    # reported version differs — fail closed rather than proceed with
+    # config only (docs/decisions.md, "fail closed everywhere").
+    response = _request(client, device.serial, version='17.0.0')
+
+    assert response.status_code == 409
+    assert response.get_json()['error'] == 'image_missing_for_version'
+
+    with app.app_context():
+        assert get_session().get(ProvisioningSession, device.serial) is None
+
+
+def test_provision_request_no_version_concept_when_device_version_unset(client, app):
+    with app.app_context():
+        session = get_session()
+        session.add(Device(serial='NO-VERSION', added_by='operator'))
+        session.commit()
+
+    response = _request(client, 'NO-VERSION', version='17.0.0')
+
+    assert response.status_code == 200
+    assert response.get_json()['payload']['image'] is None
+
+
+# Wildcard allowlist entry — see docs/decisions.md, "Wildcard allowlist entry"
+
+def test_provision_request_falls_back_to_wildcard_entry(client, app):
+    with app.app_context():
+        session = get_session()
+        session.add(Device(serial='*', added_by='operator', config_file='shared.cfg'))
+        session.commit()
+
+    response = _request(client, 'UNREGISTERED-0001', version='17.0.0')
+
+    assert response.status_code == 200
+    payload = response.get_json()['payload']
+    assert payload['serial'] == 'UNREGISTERED-0001'
+    assert payload['config_file'] == 'shared.cfg'
+
+    with app.app_context():
+        ps = get_session().get(ProvisioningSession, 'UNREGISTERED-0001')
+        assert ps is not None
+        assert ps.config_file == 'shared.cfg'
+
+
+def test_provision_request_prefers_exact_match_over_wildcard(client, app, device):
+    with app.app_context():
+        session = get_session()
+        session.add(Device(serial='*', added_by='operator', config_file='shared.cfg'))
+        session.commit()
+
+    response = _request(client, device.serial)
+
+    assert response.status_code == 200
+    assert response.get_json()['payload']['config_file'] == device.config_file
 
 
 # PUT/POST /api/v1/provision-request/facts
@@ -315,10 +412,7 @@ def test_provision_complete_failure_keeps_device_logs(client, app, active_sessio
 # queries.find_active_session_by_ip's file-download gate).
 
 def test_provision_request_pins_session_to_x_forwarded_for_ip(client, app, device):
-    response = client.get(
-        f'{BASE}/provision-request', query_string={'serial': device.serial},
-        headers={'X-Forwarded-For': '192.168.100.42'},
-    )
+    response = _request(client, device.serial, headers={'X-Forwarded-For': '192.168.100.42'})
     assert response.status_code == 200
 
     with app.app_context():
@@ -337,8 +431,8 @@ def test_provision_request_distinguishes_devices_behind_the_same_proxy_hop(clien
         session.add(Device(serial='DEV-B', added_by='operator'))
         session.commit()
 
-    client.get(f'{BASE}/provision-request', query_string={'serial': 'DEV-A'}, headers={'X-Forwarded-For': '192.168.100.10'})
-    client.get(f'{BASE}/provision-request', query_string={'serial': 'DEV-B'}, headers={'X-Forwarded-For': '192.168.100.20'})
+    _request(client, 'DEV-A', headers={'X-Forwarded-For': '192.168.100.10'})
+    _request(client, 'DEV-B', headers={'X-Forwarded-For': '192.168.100.20'})
 
     with app.app_context():
         session = get_session()
@@ -347,10 +441,7 @@ def test_provision_request_distinguishes_devices_behind_the_same_proxy_hop(clien
 
 
 def test_provision_complete_matches_when_x_forwarded_for_ip_matches_pinned_session(client, app, device):
-    client.get(
-        f'{BASE}/provision-request', query_string={'serial': device.serial},
-        headers={'X-Forwarded-For': '192.168.100.42'},
-    )
+    _request(client, device.serial, headers={'X-Forwarded-For': '192.168.100.42'})
     response = client.put(
         f'{BASE}/provision-complete', json={'serial': device.serial},
         headers={'X-Forwarded-For': '192.168.100.42'},
@@ -359,10 +450,7 @@ def test_provision_complete_matches_when_x_forwarded_for_ip_matches_pinned_sessi
 
 
 def test_provision_complete_rejects_when_x_forwarded_for_ip_differs_from_pinned_session(client, app, device):
-    client.get(
-        f'{BASE}/provision-request', query_string={'serial': device.serial},
-        headers={'X-Forwarded-For': '192.168.100.42'},
-    )
+    _request(client, device.serial, headers={'X-Forwarded-For': '192.168.100.42'})
     response = client.put(
         f'{BASE}/provision-complete', json={'serial': device.serial},
         headers={'X-Forwarded-For': '192.168.100.99'},
@@ -385,7 +473,7 @@ def _provision_request_worker(database_path, files_path, serial, barrier, result
     app = create_app({'TESTING': True, 'DATABASE_PATH': database_path, 'FILES_PATH': files_path})
     client = app.test_client()
     barrier.wait()
-    response = client.get(f'{BASE}/provision-request', query_string={'serial': serial})
+    response = client.get(f'{BASE}/provision-request', query_string={'serial': serial, 'version': CURRENT_VERSION})
     result_queue.put((serial, response.status_code))
 
 

@@ -12,12 +12,23 @@ from drawbridge.queries import (
     delete_device_logs_by_serial,
     delete_provisioning_session,
     get_device,
+    get_file_by_version,
     get_provisioning_session,
     list_devices,
     list_sessions,
     update_device,
 )
 from drawbridge.utils import error_response, success_response
+
+
+def _validate_version(session, version: str | None):
+    """Returns an error response if version is set but no image is mapped
+    to it, else None. version is chosen from a dropdown of existing image
+    versions on the frontend, but this is a public-ish admin API, so it's
+    validated server-side too — see docs/decisions.md."""
+    if version and get_file_by_version(session, 'image', version) is None:
+        return error_response(f"No image is mapped to version '{version}'", 'unknown_version', code=422)
+    return None
 
 def create_blueprint():
     bp = Blueprint(name='devices', import_name= __name__)
@@ -36,21 +47,23 @@ def create_blueprint():
                 if serial is None:
                     return error_response('Request body is missing required parameter serial', 'missing_parameter', code=422)
                 session = get_session()
-                image = data.get('image')
+                version = data.get('version')
                 config_file = data.get('config_file')
                 mac = data.get('mac')
                 description = data.get('description')
+                if err := _validate_version(session, version):
+                    return err
                 add_device(
                     session,
                     serial=serial,
                     mac=mac,
                     description=description,
-                    image=image,
+                    version=version,
                     config_file=config_file,
                     added_by=current_user.username,
                 )
                 session.commit()
-                return success_response(f"Device '{serial}' added by {current_user.username}. Image={image}. Config={config_file}. MAC={mac}. Description={description}")
+                return success_response(f"Device '{serial}' added by {current_user.username}. Version={version}. Config={config_file}. MAC={mac}. Description={description}")
             case _:
                 return error_response('Method not allowed', 'method_not_allowed', code=405, silent=True)
 
@@ -69,23 +82,25 @@ def create_blueprint():
 
             case 'PUT':
                 data = request.get_json(silent=True) or {}
-                image = data.get('image')
+                version = data.get('version')
                 config_file = data.get('config_file')
                 mac = data.get('mac')
                 description = data.get('description')
+                if err := _validate_version(session, version):
+                    return err
                 updated = update_device(
                     session,
                     serial,
                     mac=mac,
                     description=description,
-                    image=image,
+                    version=version,
                     config_file=config_file,
                 )
                 session.commit()
                 message = f"Device '{serial}' updated."
 
-                if image is not None:
-                    message += f' Image = {image}.'
+                if version is not None:
+                    message += f' Version = {version}.'
                 if config_file is not None:
                     message += f' Config = {config_file}.'
                 if mac is not None:

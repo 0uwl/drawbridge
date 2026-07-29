@@ -25,20 +25,39 @@ def list_devices(session: Session) -> list[Device]:
     return list(session.scalars(select(Device).order_by(Device.added_at)).all())
 
 
+def get_device_or_wildcard(session: Session, serial: str) -> Device | None:
+    """Exact serial match first; falls back to the 'allow all' wildcard
+    entry (serial='*') if one exists and no exact match does — see
+    docs/decisions.md, "Wildcard allowlist entry". Only used at
+    /api/v1/provision-request time; every other route (edit, delete, lookup
+    by an operator) still keys strictly off the real serial."""
+    device = get_device(session, serial)
+    if device is not None:
+        return device
+    return get_device(session, '*')
+
+
+def list_devices_by_version(session: Session, version: str) -> list[Device]:
+    """Allowlist entries whose desired version resolves to a given image -
+    used to warn an operator before deleting an image still in use (see
+    drawbridge/api/files.py)."""
+    return list(session.scalars(select(Device).where(Device.version == version)).all())
+
+
 def add_device(
     session: Session,
     *,
     serial: str,
     mac: str | None = None,
     description: str | None = None,
-    image: str | None = None,
+    version: str | None = None,
     config_file: str | None = None,
     added_by: str | None = None,
 ) -> Device:
     """Idempotent on serial: re-registering an existing serial updates its
     mutable fields instead of raising on the primary-key collision.
 
-    image and config_file fall back to their default_* Setting rows on
+    version and config_file fall back to their default_* Setting rows on
     creation only — re-registration leaves them unchanged if not explicitly
     provided."""
     device = session.get(Device, serial)
@@ -46,22 +65,22 @@ def add_device(
         device.mac = mac
         device.description = description
         device.added_by = added_by
-        if image is not None:
-            device.image = image
+        if version is not None:
+            device.version = version
         if config_file is not None:
             device.config_file = config_file
         return device
 
-    if image is None:
-        setting = get_setting(session, 'default_image')
+    if version is None:
+        setting = get_setting(session, 'default_version')
         if setting is not None:
-            image = setting.value
+            version = setting.value
     if config_file is None:
         setting = get_setting(session, 'default_config_file')
         if setting is not None:
             config_file = setting.value
 
-    device = Device(serial=serial, mac=mac, description=description, image=image, config_file=config_file, added_by=added_by)
+    device = Device(serial=serial, mac=mac, description=description, version=version, config_file=config_file, added_by=added_by)
     session.add(device)
     return device
 
@@ -72,7 +91,7 @@ def update_device(
     *,
     mac: str | None = None,
     description: str | None = None,
-    image: str | None = None,
+    version: str | None = None,
     config_file: str | None = None,
 ) -> Device | None:
     """Edits an existing allowlist entry in place. Returns None (does not
@@ -85,7 +104,7 @@ def update_device(
 
     device.mac = mac
     device.description = description
-    device.image = image
+    device.version = version
     device.config_file = config_file
     return device
 
@@ -337,6 +356,15 @@ def get_file(session: Session, file_type: str, filename: str) -> ZTPFile | None:
     return session.get(ZTPFile, (file_type, filename))
 
 
+def get_file_by_version(session: Session, file_type: str, version: str) -> ZTPFile | None:
+    """Looks up the (at most one, enforced at upload — see
+    drawbridge/api/files.py) file mapped to a given version. Only
+    meaningful for file_type='image'."""
+    return session.scalar(
+        select(ZTPFile).where(ZTPFile.file_type == file_type, ZTPFile.version == version)
+    )
+
+
 def list_files(session: Session, file_type: str) -> list[ZTPFile]:
     return list(session.scalars(
         select(ZTPFile)
@@ -352,9 +380,10 @@ def add_file(
     filename: str,
     size_bytes: int,
     sha256: str,
+    version: str | None = None,
     uploaded_by: str | None = None,
 ) -> ZTPFile:
-    f = ZTPFile(file_type=file_type, filename=filename, size_bytes=size_bytes, sha256=sha256, uploaded_by=uploaded_by)
+    f = ZTPFile(file_type=file_type, filename=filename, size_bytes=size_bytes, sha256=sha256, version=version, uploaded_by=uploaded_by)
     session.add(f)
     return f
 

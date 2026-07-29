@@ -8,8 +8,17 @@ from flask_login import current_user
 from werkzeug.utils import secure_filename
 
 from drawbridge.db import get_session
-from drawbridge.queries import add_file, delete_file, find_active_session_by_ip, get_file, list_files, update_file_hash
-from drawbridge.utils import allowed_file, error_response, is_valid_sha256, success_response
+from drawbridge.queries import (
+    add_file,
+    delete_file,
+    find_active_session_by_ip,
+    get_file,
+    get_file_by_version,
+    list_devices_by_version,
+    list_files,
+    update_file_hash,
+)
+from drawbridge.utils import allowed_file, error_response, is_valid_sha256, parse_version_from_filename, success_response
 
 CHUNK_SIZE = 64 * 1024
 
@@ -83,6 +92,32 @@ def _handle_upload(file_type: str):
         return error_response('sha256 must be 64 hex characters', 'invalid_hash', code=422)
 
     db_session = get_session()
+
+    version = None
+    if file_type == 'image':
+        version = request.form.get('version', '').strip() or parse_version_from_filename(safe_name)
+        if not version:
+            return error_response(
+                'Could not determine a version from the filename — supply one explicitly',
+                'version_required',
+                code=422,
+            )
+        conflict = get_file_by_version(db_session, 'image', version)
+        replace = request.form.get('replace', '').strip().lower() in ('1', 'true')
+        if conflict is not None and conflict.filename != safe_name:
+            if not replace:
+                return error_response(
+                    f"Version '{version}' is already mapped to '{conflict.filename}' — "
+                    "resubmit with replace=true to replace the mapping, or choose a different version",
+                    'version_conflict',
+                    code=409,
+                )
+            delete_file(db_session, 'image', conflict.filename)
+            try:
+                os.unlink(os.path.join(_type_dir('image'), conflict.filename))
+            except OSError:
+                pass
+
     if get_file(db_session, file_type, safe_name) is not None:
         return error_response(
             f'{safe_name} already exists — delete it first to replace it',
@@ -123,6 +158,7 @@ def _handle_upload(file_type: str):
         filename=safe_name,
         size_bytes=size,
         sha256=digest.hexdigest(),
+        version=version,
         uploaded_by=current_user.username,
     )
     db_session.commit()
@@ -146,6 +182,23 @@ def _handle_update_hash(file_type: str, filename: str):
 
 def _handle_delete(file_type: str, filename: str):
     db_session = get_session()
+    file_row = get_file(db_session, file_type, filename)
+    if file_row is None:
+        return error_response(f"File '{filename}' not found", 'file_not_found', code=404)
+
+    if file_type == 'image' and file_row.version:
+        affected = list_devices_by_version(db_session, file_row.version)
+        if affected and request.args.get('confirm', '').strip().lower() not in ('1', 'true'):
+            serials = ', '.join(d.serial for d in affected)
+            return error_response(
+                f"Version '{file_row.version}' is mapped to {len(affected)} allowlist "
+                f"entr{'y' if len(affected) == 1 else 'ies'} ({serials}) — deleting this image "
+                "will leave them unable to provision until a replacement image for that version "
+                "is uploaded. Resubmit with confirm=true to proceed anyway.",
+                'image_in_use',
+                code=409,
+            )
+
     if not delete_file(db_session, file_type, filename):
         return error_response(f"File '{filename}' not found", 'file_not_found', code=404)
 

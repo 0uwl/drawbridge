@@ -19,11 +19,11 @@ def _response(status_code=200, payload=None):
 
 def test_request_provisioning_uses_https_and_versioned_api_path():
     with patch('requests.get', return_value=_response(200, {'success': True})) as get:
-        ztp_mock.request_provisioning('TEST-SERIAL-0001')
+        ztp_mock.request_provisioning('TEST-SERIAL-0001', version='17.9.1')
 
     called_url = get.call_args[0][0]
     assert called_url == f'{ztp_mock.DRAWBRIDGE_BASE_URL}/provision-request'
-    assert get.call_args.kwargs['params'] == {'serial': 'TEST-SERIAL-0001'}
+    assert get.call_args.kwargs['params'] == {'serial': 'TEST-SERIAL-0001', 'version': '17.9.1'}
 
 
 def test_request_provisioning_returns_decision_on_success():

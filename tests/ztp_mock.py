@@ -29,12 +29,12 @@ DRAWBRIDGE_BASE_URL = f'https://{DRAWBRIDGE_HOST}:{DRAWBRIDGE_PORT}/api/v1'
 VERIFY = False
 
 
-def request_provisioning(serial, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
+def request_provisioning(serial, version='17.9.1', base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
     """Mirrors scripts/ztp_script.py's request_provisioning() for non-C9200CX
-    platforms: a GET with the serial as a query param, returning the parsed
-    decision dict or None if denied/unreachable."""
+    platforms: a GET with serial/version as query params, returning the
+    parsed decision dict or None if denied/unreachable."""
     response = requests.get(
-        f'{base_url}/provision-request', params={'serial': serial}, verify=verify, timeout=10,
+        f'{base_url}/provision-request', params={'serial': serial, 'version': version}, verify=verify, timeout=10,
     )
     if response.status_code != 200:
         return None
@@ -72,13 +72,13 @@ def log_to_server(serial, message, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
     )
 
 
-def main(serial, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
+def main(serial, version='17.9.1', base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
     """Mirrors scripts/ztp_script.py's main() — same call sequence and
     log-message contract, non-C9200CX path only (no trustpoint/copy
     machinery to simulate here, see the module docstring)."""
     log_to_server(serial, 'provisioning started', base_url, verify)
 
-    decision = request_provisioning(serial, base_url, verify)
+    decision = request_provisioning(serial, version, base_url, verify)
     approved = decision is not None and decision.get('success')
     log_to_server(serial, 'provision-request: ' + ('approved' if approved else 'denied/unreachable'), base_url, verify)
     if not approved:
@@ -95,6 +95,7 @@ def main(serial, base_url=DRAWBRIDGE_BASE_URL, verify=VERIFY):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--serial', required=True, help='Serial number to phone home with')
+    parser.add_argument('--version', default='17.9.1', help="Device's current version. Default: 17.9.1")
     parser.add_argument('--base-url', default=DRAWBRIDGE_BASE_URL, help=f'Default: {DRAWBRIDGE_BASE_URL}')
     args = parser.parse_args()
-    main(args.serial, args.base_url)
+    main(args.serial, args.version, args.base_url)

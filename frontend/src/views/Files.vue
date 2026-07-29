@@ -11,7 +11,10 @@ onMounted(() => {
 })
 
 const showUploadModal = ref(false)
-const pendingRemove = ref<{ fileType: FileType; filename: string } | null>(null)
+// inUseMessage is null until a delete attempt comes back 409 image_in_use —
+// at that point the confirmation modal switches to a "delete anyway" prompt
+// carrying the backend's message (which names the affected serials).
+const pendingRemove = ref<{ fileType: FileType; filename: string; inUseMessage: string | null } | null>(null)
 const staged = ref<StagedFile[]>([]) // pre-submit selection, not yet queued
 const skippedCount = ref(0)
 
@@ -57,9 +60,15 @@ function startUpload(): void {
 
 async function confirmRemove(): Promise<void> {
   if (!pendingRemove.value) return
-  const { fileType, filename } = pendingRemove.value
-  pendingRemove.value = null
-  await files.remove(fileType, filename)
+  const { fileType, filename, inUseMessage } = pendingRemove.value
+  const ok = await files.remove(fileType, filename, inUseMessage !== null)
+  if (ok) {
+    pendingRemove.value = null
+  } else if (files.errorCode === 'image_in_use') {
+    pendingRemove.value = { fileType, filename, inUseMessage: files.error }
+  } else {
+    pendingRemove.value = null
+  }
 }
 
 function openEditHash(f: ZTPFile): void {
@@ -115,6 +124,7 @@ function statusProgressClass(status: UploadStatus): string {
           <tr>
             <th>Filename</th>
             <th>Type</th>
+            <th>Version</th>
             <th>Size</th>
             <th>Uploaded</th>
             <th>Uploaded by</th>
@@ -130,20 +140,21 @@ function statusProgressClass(status: UploadStatus): string {
           >
             <td class="font-mono">{{ f.filename }}</td>
             <td><span class="badge badge-outline">{{ TYPE_LABELS[f.file_type] }}</span></td>
+            <td class="font-mono">{{ f.version ?? '—' }}</td>
             <td>{{ formatBytes(f.size_bytes) }}</td>
             <td :title="f.uploaded_at">{{ formatTimestamp(f.uploaded_at) }}</td>
             <td>{{ f.uploaded_by ?? '-' }}</td>
             <td>
               <button
                 class="btn btn-error btn-xs"
-                @click.stop="pendingRemove = { fileType: f.file_type, filename: f.filename }"
+                @click.stop="pendingRemove = { fileType: f.file_type, filename: f.filename, inUseMessage: null }"
               >
                 Delete
               </button>
             </td>
           </tr>
           <tr v-if="files.items.length === 0">
-            <td colspan="6" class="text-center text-base-content/60">No files uploaded</td>
+            <td colspan="7" class="text-center text-base-content/60">No files uploaded</td>
           </tr>
         </tbody>
       </table>
@@ -175,6 +186,13 @@ function statusProgressClass(status: UploadStatus): string {
             >
               <span class="font-mono truncate">{{ s.file.name }}</span>
               <input
+                v-if="s.fileType === 'image'"
+                v-model="s.version"
+                type="text"
+                placeholder="version (auto-detected if blank)"
+                class="input input-bordered input-xs font-mono w-48"
+              />
+              <input
                 v-model="s.sha256"
                 type="text"
                 placeholder="sha256 (optional)"
@@ -200,9 +218,16 @@ function statusProgressClass(status: UploadStatus): string {
                 <span class="font-mono truncate">{{ item.filename }}</span>
                 <span class="flex items-center gap-2 shrink-0">
                   <span class="badge badge-outline badge-sm">{{ TYPE_LABELS[item.fileType] }}</span>
-                  <span class="badge badge-sm" :class="statusBadgeClass(item.status)">
-                    {{ item.status === 'error' ? item.error : item.status }}
+                  <span v-if="item.status !== 'error'" class="badge badge-sm" :class="statusBadgeClass(item.status)">
+                    {{ item.status }}
                   </span>
+                  <button
+                    v-if="item.conflict"
+                    class="btn btn-warning btn-xs"
+                    @click="files.retryUploadWithReplace(item.id)"
+                  >
+                    Replace mapping
+                  </button>
                   <button
                     class="btn btn-ghost btn-xs"
                     :disabled="item.status === 'done' || item.status === 'error' || item.status === 'canceled'"
@@ -212,6 +237,7 @@ function statusProgressClass(status: UploadStatus): string {
                   </button>
                 </span>
               </div>
+              <p v-if="item.status === 'error'" class="text-error text-xs mb-1">{{ item.error }}</p>
               <progress class="progress w-full" :class="statusProgressClass(item.status)" :value="item.progress" max="100"></progress>
             </li>
           </ul>
@@ -227,13 +253,16 @@ function statusProgressClass(status: UploadStatus): string {
     <dialog class="modal" :open="pendingRemove !== null">
       <div class="modal-box">
         <h3 class="font-bold text-lg">Delete file?</h3>
-        <p class="py-4">
+        <p v-if="pendingRemove?.inUseMessage" class="py-4 text-warning">{{ pendingRemove.inUseMessage }}</p>
+        <p v-else class="py-4">
           This permanently deletes <span class="font-mono">{{ pendingRemove?.filename }}</span> from disk.
           This cannot be undone.
         </p>
         <div class="modal-action">
           <button class="btn" @click="pendingRemove = null">Cancel</button>
-          <button class="btn btn-error" @click="confirmRemove">Delete</button>
+          <button class="btn btn-error" @click="confirmRemove">
+            {{ pendingRemove?.inUseMessage ? 'Delete anyway' : 'Delete' }}
+          </button>
         </div>
       </div>
     </dialog>

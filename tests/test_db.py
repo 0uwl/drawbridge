@@ -17,22 +17,22 @@ def test_init_db_seeds_log_retention_from_config(app):
         assert setting.value == app.config['LOG_RETENTION_DAYS']
 
 
-def test_init_db_seeds_default_image_when_configured(tmp_path):
+def test_init_db_seeds_default_version_when_configured(tmp_path):
     app = create_app({
         'TESTING': True,
         'DATABASE_PATH': str(tmp_path / 'drawbridge.db'),
         'FILES_PATH': str(tmp_path / 'files'),
-        'DEFAULT_IMAGE': 'ios-xe-17.9.bin',
+        'DEFAULT_VERSION': '17.9.1',
     })
     with app.app_context():
-        setting = get_session().get(Setting, 'default_image')
+        setting = get_session().get(Setting, 'default_version')
         assert setting is not None
-        assert setting.value == 'ios-xe-17.9.bin'
+        assert setting.value == '17.9.1'
 
 
-def test_init_db_does_not_seed_default_image_when_not_configured(app):
+def test_init_db_does_not_seed_default_version_when_not_configured(app):
     with app.app_context():
-        assert get_session().get(Setting, 'default_image') is None
+        assert get_session().get(Setting, 'default_version') is None
 
 
 def test_init_db_seeds_default_config_file_when_configured(tmp_path):

@@ -18,21 +18,21 @@ served over plain HTTP on `:8090`, not through this Flask app at all. See
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/v1/provision-request` | Called by the ZTP script's phone-home step on boot; approves or denies provisioning |
+| GET | `/api/v1/provision-request` | Called by the ZTP script's phone-home step on boot; approves or denies provisioning, and decides whether an image needs to be pushed — see "`/api/v1/provision-request` contract" below |
 | PUT/POST | `/api/v1/provision-request/facts` | Called by the ZTP script once its session is approved, to self-report device facts (`model`, `version`) onto the active `ProvisioningSession` row — see "`/api/v1/provision-request/facts` contract" below |
 | GET | `/api/v1/devices` | List devices currently pending provisioning |
-| POST | `/api/v1/devices` | Register a new device (serial + optional metadata) |
-| PUT | `/api/v1/devices/<serial>` | Edit an existing allowlist entry (`mac`, `description`, `image`, `config_file`). `404 device_not_found` if the serial doesn't already exist — this route never creates one |
+| POST | `/api/v1/devices` | Register a new device (serial + optional metadata, including `version` — see the `PUT` row below for its validation). A `serial` of literal `*` registers the "allow all" wildcard entry — see [decisions.md](decisions.md), "Wildcard allowlist entry" |
+| PUT | `/api/v1/devices/<serial>` | Edit an existing allowlist entry (`mac`, `description`, `version`, `config_file`). `version` must name an existing image's mapped version (`422 unknown_version` otherwise — see `POST /files/images` below) or be omitted/null. `404 device_not_found` if the serial doesn't already exist — this route never creates one |
 | DELETE | `/api/v1/devices/<serial>` | Remove a device from the allowlist. `409 active_session_exists` if a `ProvisioningSession` is still active — cancel it first (see below). Also clears that serial's `DeviceLogEntry` rows, regardless of age — see [database.md](database.md), "Log Retention & Data Minimisation" |
 | GET | `/api/v1/devices/<serial>` | Get a pending device's status (not history — see `/api/v1/log`) |
 | GET | `/api/v1/devices/sessions` | List all active provisioning sessions |
 | GET | `/api/v1/devices/sessions/<serial>` | Get the active provisioning session for a device |
 | DELETE | `/api/v1/devices/sessions/<serial>` | Cancel a stale `ProvisioningSession` — admin-initiated only, and only once it's been quiet for longer than `SESSION_STALE_AFTER_MINUTES` (default 60); `409 session_not_stale` otherwise, `404 session_not_found` if there's no active session for that serial. Writes a `ProvisioningLog` row (`event='provision_cancelled'`) before deleting the session; `DeviceLogEntry` rows are left in place, same as a failure — see [database.md](database.md), "Stale sessions" |
 | GET | `/files/images` | List uploaded OS images (auth required) |
-| POST | `/files/images` | Upload an OS image (auth required). Optional `sha256` form field — if given, must match the uploaded bytes or the upload is rejected (`422 hash_mismatch`); if omitted, the hash is computed and stored automatically |
+| POST | `/files/images` | Upload an OS image (auth required). Optional `sha256` form field, same as before. Also resolves a `version` for the image (X.X.X): the optional `version` form field, if given, is used as-is; otherwise it's parsed from the filename (`422 version_required` if neither works). Version→image is enforced 1:1 — `409 version_conflict` if the resolved version is already mapped to a different filename, naming the existing one; resubmit with a truthy `replace` form field to supersede that mapping instead (deletes the old `ZTPFile` row and its file on disk first) |
 | GET | `/files/images/<filename>` | Download an OS image — unauthenticated, served to devices during ZTP |
 | PUT | `/files/images/<filename>` | Update the stored sha256 for an image (auth required) |
-| DELETE | `/files/images/<filename>` | Delete an OS image (auth required) |
+| DELETE | `/files/images/<filename>` | Delete an OS image (auth required). `409 image_in_use` if any `Device` row's `version` resolves to this image, naming the affected serials — resubmit with `confirm=true` in the query string to delete anyway. See [decisions.md](decisions.md), "Version-based image mapping" |
 | GET | `/files/configs` | List uploaded config files (auth required) |
 | POST | `/files/configs` | Upload a config file (auth required). Same optional `sha256` form field behavior as image upload |
 | GET | `/files/configs/<filename>` | Download a config file — unauthenticated, served to devices during ZTP |
@@ -88,16 +88,46 @@ from Guestshell — see [decisions.md](decisions.md), "C9200CX network stack
 isolation") can't attach a request body:
 
 ```
-GET /api/v1/provision-request?serial=FJC2517X0AB&mac=aa:bb:cc:dd:ee:ff
+GET /api/v1/provision-request?serial=FJC2517X0AB&version=17.9.1&mac=aa:bb:cc:dd:ee:ff
 ```
 
-`mac` is optional (audit/logging only, not used for lookup — the script
-always knows its own real serial via `show version`, so no serial/MAC
-fallback matching is needed here). Responses:
-- `200 OK` → known serial; payload is the `Device` record (image, config
-  file to fetch); a `ProvisioningSession` row is created
-- `404 device_not_found` → unknown serial; script exits, does not proceed
-- `422 missing_parameter` → `serial` missing from the query string
+`version` is the device's own current software version (from `show
+version`, already known locally before this call — no sequencing problem
+with the separate `/provision-request/facts` call below). `mac` is optional
+(audit/logging only, not used for lookup — the script always knows its own
+real serial via `show version`, so no serial/MAC fallback matching is
+needed here).
+
+Lookup is by exact `serial` match; if none exists, falls back to the
+wildcard `Device` row (`serial='*'`) if one is registered — see
+[decisions.md](decisions.md), "Wildcard allowlist entry".
+
+The matched `Device`'s desired `version` decides what the response payload
+includes:
+- `Device.version` is `null` → no upgrade concept for this device; `image`
+  is always `null` in the response.
+- `Device.version` equals the reported `version` → already correct;
+  `image` is `null`.
+- Otherwise → the `ZTPFile` mapped to `Device.version` is looked up and its
+  filename is returned as `image`. If no such file exists (e.g. it was
+  deleted after the allowlist entry was created — see `DELETE
+  /files/images/<filename>` above), the request is denied outright
+  (fail closed) rather than proceeding with config only.
+
+`config_file` is included whenever the matched `Device.config_file` is set,
+independent of the version decision above. Responses:
+- `200 OK` → known serial (or wildcard match); payload is the `Device`
+  record with `serial` set to the caller's real serial (not `*` for a
+  wildcard match) and `image` set to the resolved filename (or `null`); a
+  `ProvisioningSession` row is created
+- `404 device_not_found` → unknown serial and no wildcard entry; script
+  exits, does not proceed
+- `409 image_missing_for_version` → the desired version has no image
+  mapped to it; denied, no session created (fail closed)
+- `409 session_mismatch` → a repeat call conflicts with the mac/ip already
+  pinned to this serial's session
+- `422 missing_parameter` → `serial` or `version` missing from the query
+  string
 
 ## `/api/v1/provision-request/facts` contract
 

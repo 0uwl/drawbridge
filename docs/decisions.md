@@ -279,6 +279,44 @@
   one-liner installs a fixed, reproducible version rather than
   tip-of-branch.
 
+- **Version-based image mapping — allowlist entries name a desired
+  version, not a file (v0.4.0).** An operator sets `Device.version` (e.g.
+  `17.9.1`), not an image filename; `/api/v1/provision-request` resolves it
+  to a `ZTPFile` via a `version` column enforced 1:1 with images at upload
+  time (`POST /files/images` — two images can't claim the same version;
+  uploading one that would is a `409 version_conflict` unless the operator
+  explicitly opts into replacing the mapping). The comparison against what
+  the device reports is exact string equality on the parsed `X.X.X` form,
+  not a "minimum version" check — deliberately: this is the exact version
+  a device should end up at, not a floor, so a device newer than desired is
+  still pushed to (and can be downgraded to) exactly what's set. **Fail
+  closed on a dangling mapping:** if `Device.version` is set but its
+  `ZTPFile` was deleted afterward (`DELETE /files/images/<filename>` warns
+  before this, requiring `confirm=true` — see [api.md](api.md)),
+  `/provision-request` denies the request outright rather than silently
+  proceeding with config only. **Unverified without real hardware:**
+  whether the device-reported version string (from `show version`) and the
+  parsed/operator-supplied image version always normalize to the same
+  `X.X.X` shape — equality matching is only correct if they do; this needs
+  confirming against a real C9200CX before relying on it in production.
+
+- **Wildcard allowlist entry (`serial='*'`) for directly-connected local
+  deployments (v0.4.0).** `/api/v1/provision-request` falls back to a
+  `Device` row with `serial='*'` when the reported serial has no exact
+  match — an explicit, opt-in exception to "serial number over MAC,
+  canonical allowlist identifier" above. Meant for a deployment where the
+  operator has physical control of the whole network segment (devices
+  directly connected to Drawbridge, no untrusted hop in between), so the
+  usual reason serial-based allowlisting matters — an untrusted device on
+  the VLAN impersonating or enumerating a registered serial — doesn't
+  apply: every device on the segment is already trusted by construction.
+  Not the default; an operator has to explicitly create the `'*'` row
+  (normal `POST /api/v1/devices` with that serial, no schema change) to
+  turn it on. The `ProvisioningSession`/`ProvisioningLog` rows created for
+  a wildcard-matched device still use its real reported serial — the
+  wildcard only decides which `Device` row supplies the desired version
+  and config file, not what identifies the device afterward.
+
 - **`DRAWBRIDGE_PORT` controls where the app is *reached*, but several other
   hardcoded port numbers aren't wired to it (the "hardcoded 8080s").**
   `dev.sh`'s `flask run --port` and `frontend/vite.config.js`'s dev-proxy
