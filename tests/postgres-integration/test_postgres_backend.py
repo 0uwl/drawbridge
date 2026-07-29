@@ -92,7 +92,7 @@ def _provision_request_worker(database_path, files_path, serial, barrier, result
     app = create_app({'TESTING': True, 'DATABASE_PATH': database_path, 'FILES_PATH': files_path})
     client = app.test_client()
     barrier.wait()
-    response = client.get('/api/v1/provision-request', query_string={'serial': serial})
+    response = client.get('/api/v1/provision-request', query_string={'serial': serial, 'version': '17.9.1'})
     result_queue.put((serial, response.status_code))
 
 
@@ -144,7 +144,9 @@ def test_device_and_provision_round_trip_via_flask_client(clean_pg, pg_url, tmp_
         session.add(Device(serial='FJC2517X0AB', mac='aa:bb:cc:dd:ee:ff', added_by='operator'))
         session.commit()
 
-    request_response = client.get('/api/v1/provision-request', query_string={'serial': 'FJC2517X0AB'})
+    request_response = client.get(
+        '/api/v1/provision-request', query_string={'serial': 'FJC2517X0AB', 'version': '17.9.1'},
+    )
     assert request_response.status_code == 200
 
     complete_response = client.put(
