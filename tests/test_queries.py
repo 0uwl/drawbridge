@@ -29,23 +29,23 @@ def test_add_device_is_idempotent_on_serial(session):
     assert devices[0].description == 'second'
 
 
-def test_add_device_stores_image_and_config_file(session):
-    queries.add_device(session, serial='SN1', image='ios-xe-17.9.bin', config_file='spine.cfg')
+def test_add_device_stores_version_and_config_file(session):
+    queries.add_device(session, serial='SN1', version='17.9.1', config_file='spine.cfg')
     session.commit()
 
     device = queries.get_device(session, 'SN1')
-    assert device.image == 'ios-xe-17.9.bin'
+    assert device.version == '17.9.1'
     assert device.config_file == 'spine.cfg'
 
 
-def test_add_device_uses_default_image_from_setting(session):
-    session.add(Setting(key='default_image', value='ios-xe-default.bin'))
+def test_add_device_uses_default_version_from_setting(session):
+    session.add(Setting(key='default_version', value='17.9.1'))
     session.commit()
 
     queries.add_device(session, serial='SN1')
     session.commit()
 
-    assert queries.get_device(session, 'SN1').image == 'ios-xe-default.bin'
+    assert queries.get_device(session, 'SN1').version == '17.9.1'
 
 
 def test_add_device_uses_default_config_file_from_setting(session):
@@ -58,34 +58,34 @@ def test_add_device_uses_default_config_file_from_setting(session):
     assert queries.get_device(session, 'SN1').config_file == 'default.cfg'
 
 
-def test_add_device_explicit_image_overrides_default(session):
-    session.add(Setting(key='default_image', value='ios-xe-default.bin'))
+def test_add_device_explicit_version_overrides_default(session):
+    session.add(Setting(key='default_version', value='17.9.1'))
     session.commit()
 
-    queries.add_device(session, serial='SN1', image='ios-xe-custom.bin')
+    queries.add_device(session, serial='SN1', version='17.12.1')
     session.commit()
 
-    assert queries.get_device(session, 'SN1').image == 'ios-xe-custom.bin'
+    assert queries.get_device(session, 'SN1').version == '17.12.1'
 
 
-def test_add_device_reregistration_preserves_image_when_not_provided(session):
-    queries.add_device(session, serial='SN1', image='ios-xe-17.9.bin')
+def test_add_device_reregistration_preserves_version_when_not_provided(session):
+    queries.add_device(session, serial='SN1', version='17.9.1')
     session.commit()
 
     queries.add_device(session, serial='SN1', mac='aa:bb')
     session.commit()
 
-    assert queries.get_device(session, 'SN1').image == 'ios-xe-17.9.bin'
+    assert queries.get_device(session, 'SN1').version == '17.9.1'
 
 
-def test_add_device_reregistration_updates_image_when_provided(session):
-    queries.add_device(session, serial='SN1', image='ios-xe-17.9.bin')
+def test_add_device_reregistration_updates_version_when_provided(session):
+    queries.add_device(session, serial='SN1', version='17.9.1')
     session.commit()
 
-    queries.add_device(session, serial='SN1', image='ios-xe-17.12.bin')
+    queries.add_device(session, serial='SN1', version='17.12.1')
     session.commit()
 
-    assert queries.get_device(session, 'SN1').image == 'ios-xe-17.12.bin'
+    assert queries.get_device(session, 'SN1').version == '17.12.1'
 
 
 # update_device
@@ -95,17 +95,17 @@ def test_update_device_returns_none_when_not_found(session):
 
 
 def test_update_device_edits_existing_fields(session):
-    queries.add_device(session, serial='SN1', mac='aa:bb', description='old', image='old.bin', config_file='old.cfg')
+    queries.add_device(session, serial='SN1', mac='aa:bb', description='old', version='17.9.1', config_file='old.cfg')
     session.commit()
 
     updated = queries.update_device(
-        session, 'SN1', mac='cc:dd', description='new', image='new.bin', config_file='new.cfg',
+        session, 'SN1', mac='cc:dd', description='new', version='17.12.1', config_file='new.cfg',
     )
     session.commit()
 
     assert updated.mac == 'cc:dd'
     assert updated.description == 'new'
-    assert updated.image == 'new.bin'
+    assert updated.version == '17.12.1'
     assert updated.config_file == 'new.cfg'
 
 
@@ -124,6 +124,38 @@ def test_delete_device(session):
     session.commit()
     assert queries.get_device(session, 'SN1') is None
     assert queries.delete_device(session, 'SN1') is False
+
+
+def test_get_device_or_wildcard_prefers_exact_match(session):
+    queries.add_device(session, serial='SN1', version='17.9.1')
+    queries.add_device(session, serial='*', version='17.12.1')
+    session.commit()
+
+    assert queries.get_device_or_wildcard(session, 'SN1').version == '17.9.1'
+
+
+def test_get_device_or_wildcard_falls_back_to_wildcard(session):
+    queries.add_device(session, serial='*', version='17.12.1')
+    session.commit()
+
+    device = queries.get_device_or_wildcard(session, 'UNKNOWN')
+    assert device is not None
+    assert device.serial == '*'
+    assert device.version == '17.12.1'
+
+
+def test_get_device_or_wildcard_returns_none_when_neither_exists(session):
+    assert queries.get_device_or_wildcard(session, 'UNKNOWN') is None
+
+
+def test_list_devices_by_version(session):
+    queries.add_device(session, serial='SN1', version='17.9.1')
+    queries.add_device(session, serial='SN2', version='17.9.1')
+    queries.add_device(session, serial='SN3', version='17.12.1')
+    session.commit()
+
+    matches = queries.list_devices_by_version(session, '17.9.1')
+    assert sorted(d.serial for d in matches) == ['SN1', 'SN2']
 
 
 # ProvisioningSession

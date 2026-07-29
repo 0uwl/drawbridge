@@ -25,7 +25,11 @@ class Device(Base):
     serial: Mapped[str] = mapped_column(primary_key=True)
     mac: Mapped[str | None]
     description: Mapped[str | None]
-    image: Mapped[str | None]
+    # Desired software version, e.g. '17.9.1'. Resolved to an image filename
+    # at /api/v1/provision-request time via a ZTPFile lookup (version ->
+    # image is 1:1, enforced at upload) rather than storing a filename
+    # directly here — see docs/decisions.md, "Version-based image mapping".
+    version: Mapped[str | None]
     config_file: Mapped[str | None]
     added_at: Mapped[str] = mapped_column(default=utcnow_iso)
     added_by: Mapped[str | None]
@@ -35,7 +39,7 @@ class Device(Base):
             'serial': self.serial,
             'mac': self.mac,
             'description': self.description,
-            'image': self.image,
+            'version': self.version,
             'config_file': self.config_file,
             'added_at': self.added_at,
             'added_by': self.added_by,
@@ -195,6 +199,12 @@ class ZTPFile(Base):
     filename:    Mapped[str] = mapped_column(primary_key=True)
     size_bytes:  Mapped[int]
     sha256:      Mapped[str]
+    # Software version this image corresponds to (e.g. '17.9.1') - only ever
+    # set for file_type='image', always None for 'config'. Parsed from the
+    # filename at upload time, or supplied manually when parsing fails.
+    # Enforced 1:1 with version at upload (see drawbridge/api/files.py) so a
+    # Device.version can always be resolved to exactly one image.
+    version:     Mapped[str | None]
     uploaded_at: Mapped[str] = mapped_column(default=utcnow_iso)
     uploaded_by: Mapped[str | None]
 
@@ -204,6 +214,7 @@ class ZTPFile(Base):
             'filename': self.filename,
             'size_bytes': self.size_bytes,
             'sha256': self.sha256,
+            'version': self.version,
             'uploaded_at': self.uploaded_at,
             'uploaded_by': self.uploaded_by,
         }

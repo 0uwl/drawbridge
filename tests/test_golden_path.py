@@ -23,7 +23,10 @@ def test_golden_path_register_provision_log_remove(app, logged_in_admin_client, 
     assert SERIAL in {d['serial'] for d in response.get_json()['payload']}
 
     # 2. Device phones home (unauthenticated) — approved, session created
-    response = client.get(f'{BASE}/provision-request', query_string={'serial': SERIAL, 'mac': 'aa:bb:cc:dd:ee:ff'})
+    response = client.get(
+        f'{BASE}/provision-request',
+        query_string={'serial': SERIAL, 'mac': 'aa:bb:cc:dd:ee:ff', 'version': '17.9.1'},
+    )
     assert response.status_code == 200
     with app.app_context():
         assert get_session().get(ProvisioningSession, SERIAL) is not None

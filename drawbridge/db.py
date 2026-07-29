@@ -61,7 +61,7 @@ def _bootstrap_once(app, engine, session_factory):
 
         with session_factory() as session:
             _seed_log_retention(session, app)
-            _seed_default_image(session, app)
+            _seed_default_version(session, app)
             _seed_default_config_file(session, app)
             if is_first_run:
                 _bootstrap_admin(session, app)
@@ -193,10 +193,10 @@ def _seed_log_retention(session, app):
         ))
 
 
-def _seed_default_image(session, app):
-    value = app.config['DEFAULT_IMAGE']
-    if value is not None and session.get(Setting, 'default_image') is None:
-        session.add(Setting(key='default_image', value=value))
+def _seed_default_version(session, app):
+    value = app.config['DEFAULT_VERSION']
+    if value is not None and session.get(Setting, 'default_version') is None:
+        session.add(Setting(key='default_version', value=value))
 
 
 def _seed_default_config_file(session, app):

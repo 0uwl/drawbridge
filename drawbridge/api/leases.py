@@ -5,7 +5,8 @@ from drawbridge.queries import (
     add_log_entry,
     create_provisioning_session,
     delete_provisioning_session,
-    get_device,
+    get_device_or_wildcard,
+    get_file_by_version,
     get_provisioning_session,
     update_session_facts,
 )
@@ -21,26 +22,53 @@ def create_blueprint():
         IOS XE's `copy` primitive (the only network I/O available from
         Guestshell, see docs/decisions.md) can't attach a request body.
         Open route, no auth decorator — same posture as /provision-complete
-        below: gated by the serial lookup itself, not by caller identity."""
+        below: gated by the serial lookup itself, not by caller identity.
+
+        version is the device's own current version (from `show version`,
+        already known locally before this call) — compared against the
+        matched Device row's desired version to decide whether an image
+        filename is included in the response payload. See docs/api.md."""
         serial = request.args.get('serial')
         if not serial:
             return error_response('Request is missing required parameter serial', 'missing_parameter', code=422)
+
+        version = request.args.get('version')
+        if not version:
+            return error_response('Request is missing required parameter version', 'missing_parameter', code=422)
 
         mac = request.args.get('mac')  # optional; pinned alongside ip on first call for this
         # serial, compared (not overwritten) on repeats — see create_provisioning_session
 
         session = get_session()
-        device = get_device(session, serial)
+        # Exact serial match, falling back to the 'allow all' wildcard entry
+        # (serial='*') if one exists — see docs/decisions.md, "Wildcard
+        # allowlist entry".
+        device = get_device_or_wildcard(session, serial)
 
         if device is None:
             return error_response(f'{serial} not found', 'device_not_found', code=404)
+
+        image = None
+        if device.version and device.version != version:
+            image_file = get_file_by_version(session, 'image', device.version)
+            if image_file is None:
+                # Fail closed (docs/decisions.md): the allowlist entry names
+                # a desired version with no image mapped to it (e.g. the
+                # image was deleted after this Device row was created) —
+                # don't silently proceed with config only.
+                return error_response(
+                    f"{serial}'s desired version '{device.version}' has no image mapped to it",
+                    'image_missing_for_version',
+                    code=409,
+                )
+            image = image_file.filename
 
         ps = create_provisioning_session(
             session,
             serial=serial,
             mac=mac,
             ip=request.remote_addr,
-            image=device.image,
+            image=image,
             config_file=device.config_file,
         )
         if ps is None:
@@ -49,7 +77,12 @@ def create_blueprint():
             )
         session.commit()
 
-        return success_response(f'{serial} approved', payload=device.as_dict())
+        # device.as_dict()'s 'serial' is overridden below for the wildcard
+        # case, where device.serial is literally '*', not the caller's real
+        # serial. 'image' is the resolved filename (or None), not the
+        # Device row's desired-version field.
+        payload = {**device.as_dict(), 'serial': serial, 'image': image}
+        return success_response(f'{serial} approved', payload=payload)
 
     @bp.route('/provision-request/facts', methods=['PUT', 'POST'])
     def provision_request_facts():

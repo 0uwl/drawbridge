@@ -62,3 +62,15 @@ _SHA256_RE = re.compile(r'^[0-9a-fA-F]{64}$')
 
 def is_valid_sha256(value: str) -> bool:
     return bool(_SHA256_RE.fullmatch(value))
+
+
+_VERSION_RE = re.compile(r'(\d+\.\d+\.\d+)')
+
+
+def parse_version_from_filename(filename: str) -> str | None:
+    """Best-effort X.X.X version extraction from an image filename (e.g.
+    'cat9k_iosxe.17.9.1.SPA.bin' -> '17.9.1'). Returns None when no such
+    pattern is found — the caller falls back to asking the operator to
+    supply it manually, same UX as the sha256 field."""
+    match = _VERSION_RE.search(filename)
+    return match.group(1) if match else None

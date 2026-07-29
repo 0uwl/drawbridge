@@ -3,9 +3,21 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from drawbridge.db import get_session
-from drawbridge.models import Device, DeviceLogEntry, ProvisioningLog, ProvisioningSession, SESSION_STALE_AFTER_MINUTES, Setting
+from drawbridge.models import Device, DeviceLogEntry, ProvisioningLog, ProvisioningSession, SESSION_STALE_AFTER_MINUTES, Setting, ZTPFile
 
 BASE = '/api/v1'
+
+
+def _add_image_version(app, version: str, filename: str | None = None):
+    """Registers a ZTPFile image mapped to version, so tests can set a
+    Device.version that passes devices.py's server-side unknown_version
+    check (see drawbridge/api/devices.py, _validate_version)."""
+    filename = filename or f'image-{version}.bin'
+    with app.app_context():
+        session = get_session()
+        session.add(ZTPFile(file_type='image', filename=filename, size_bytes=1, sha256='a' * 64, version=version))
+        session.commit()
+    return filename
 
 
 @pytest.fixture()
@@ -99,11 +111,12 @@ def test_add_device_returns_200_with_serial_only(logged_in_client):
 
 
 def test_add_device_persists_to_db(app, logged_in_client):
+    _add_image_version(app, '17.9.1')
     logged_in_client.post(f'{BASE}/devices/', json={
         'serial': 'FJC2517X0AB',
         'mac': 'aa:bb:cc:dd:ee:ff',
         'description': 'Edge router',
-        'image': 'ios-xe-17.9.bin',
+        'version': '17.9.1',
         'config_file': 'spine.cfg',
     })
     with app.app_context():
@@ -111,8 +124,14 @@ def test_add_device_persists_to_db(app, logged_in_client):
         assert d is not None
         assert d.mac == 'aa:bb:cc:dd:ee:ff'
         assert d.description == 'Edge router'
-        assert d.image == 'ios-xe-17.9.bin'
+        assert d.version == '17.9.1'
         assert d.config_file == 'spine.cfg'
+
+
+def test_add_device_returns_422_for_unknown_version(logged_in_client):
+    response = logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'version': '99.9.9'})
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'unknown_version'
 
 
 def test_add_device_sets_added_by_to_current_user(app, logged_in_client, user):
@@ -122,17 +141,17 @@ def test_add_device_sets_added_by_to_current_user(app, logged_in_client, user):
         assert d.added_by == user.username
 
 
-def test_add_device_uses_default_image_when_not_provided(app, logged_in_client):
+def test_add_device_uses_default_version_when_not_provided(app, logged_in_client):
     with app.app_context():
         session = get_session()
-        session.add(Setting(key='default_image', value='ios-xe-default.bin'))
+        session.add(Setting(key='default_version', value='17.9.1'))
         session.commit()
 
     logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB'})
 
     with app.app_context():
         d = get_session().get(Device, 'FJC2517X0AB')
-        assert d.image == 'ios-xe-default.bin'
+        assert d.version == '17.9.1'
 
 
 def test_add_device_uses_default_config_file_when_not_provided(app, logged_in_client):
@@ -148,17 +167,18 @@ def test_add_device_uses_default_config_file_when_not_provided(app, logged_in_cl
         assert d.config_file == 'default.cfg'
 
 
-def test_add_device_explicit_image_overrides_default(app, logged_in_client):
+def test_add_device_explicit_version_overrides_default(app, logged_in_client):
     with app.app_context():
         session = get_session()
-        session.add(Setting(key='default_image', value='ios-xe-default.bin'))
+        session.add(Setting(key='default_version', value='17.9.1'))
         session.commit()
+    _add_image_version(app, '17.12.1')
 
-    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'image': 'ios-xe-custom.bin'})
+    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'version': '17.12.1'})
 
     with app.app_context():
         d = get_session().get(Device, 'FJC2517X0AB')
-        assert d.image == 'ios-xe-custom.bin'
+        assert d.version == '17.12.1'
 
 
 def test_add_device_is_idempotent_on_serial(app, logged_in_client, device):
@@ -175,22 +195,25 @@ def test_add_device_is_idempotent_on_serial(app, logged_in_client, device):
     assert len(response.get_json()['payload']) == 1
 
 
-def test_reregistration_preserves_image_when_not_provided(app, logged_in_client):
-    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'image': 'ios-xe-17.9.bin'})
+def test_reregistration_preserves_version_when_not_provided(app, logged_in_client):
+    _add_image_version(app, '17.9.1')
+    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'version': '17.9.1'})
     logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'mac': 'aa:bb:cc:dd:ee:ff'})
 
     with app.app_context():
         d = get_session().get(Device, 'FJC2517X0AB')
-        assert d.image == 'ios-xe-17.9.bin'
+        assert d.version == '17.9.1'
 
 
-def test_reregistration_updates_image_when_provided(app, logged_in_client):
-    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'image': 'ios-xe-17.9.bin'})
-    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'image': 'ios-xe-17.12.bin'})
+def test_reregistration_updates_version_when_provided(app, logged_in_client):
+    _add_image_version(app, '17.9.1')
+    _add_image_version(app, '17.12.1')
+    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'version': '17.9.1'})
+    logged_in_client.post(f'{BASE}/devices/', json={'serial': 'FJC2517X0AB', 'version': '17.12.1'})
 
     with app.app_context():
         d = get_session().get(Device, 'FJC2517X0AB')
-        assert d.image == 'ios-xe-17.12.bin'
+        assert d.version == '17.12.1'
 
 
 # GET /api/v1/devices/<serial>
@@ -234,25 +257,32 @@ def test_edit_device_does_not_create_a_new_device(app, logged_in_client):
 
 
 def test_edit_device_updates_fields(app, logged_in_client, device):
+    _add_image_version(app, '17.12.1')
     response = logged_in_client.put(f'{BASE}/devices/{device.serial}', json={
         'mac': '11:22:33:44:55:66',
         'description': 'Updated description',
-        'image': 'ios-xe-17.12.bin',
+        'version': '17.12.1',
         'config_file': 'edge.cfg',
     })
     assert response.status_code == 200
     payload = response.get_json()['payload']
     assert payload['mac'] == '11:22:33:44:55:66'
     assert payload['description'] == 'Updated description'
-    assert payload['image'] == 'ios-xe-17.12.bin'
+    assert payload['version'] == '17.12.1'
     assert payload['config_file'] == 'edge.cfg'
 
     with app.app_context():
         d = get_session().get(Device, device.serial)
         assert d.mac == '11:22:33:44:55:66'
         assert d.description == 'Updated description'
-        assert d.image == 'ios-xe-17.12.bin'
+        assert d.version == '17.12.1'
         assert d.config_file == 'edge.cfg'
+
+
+def test_edit_device_returns_422_for_unknown_version(logged_in_client, device):
+    response = logged_in_client.put(f'{BASE}/devices/{device.serial}', json={'version': '99.9.9'})
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'unknown_version'
 
 
 def test_edit_device_clears_fields_omitted_from_body(app, logged_in_client, device):

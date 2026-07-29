@@ -17,10 +17,10 @@ class Device(Base):
     retried without re-registration. Operator must explicitly DELETE to remove."""
     __tablename__ = 'devices'
 
-    serial: Mapped[str] = mapped_column(primary_key=True)
+    serial: Mapped[str] = mapped_column(primary_key=True)  # literal '*' is the "allow all" wildcard entry
     mac: Mapped[str | None]
     description: Mapped[str | None]
-    image: Mapped[str | None]        # falls back to default_image Setting on creation
+    version: Mapped[str | None]      # desired version; falls back to default_version Setting on creation
     config_file: Mapped[str | None]  # falls back to default_config_file Setting on creation
     added_at: Mapped[str]
     added_by: Mapped[str | None]
@@ -75,6 +75,7 @@ class ZTPFile(Base):
     filename:    Mapped[str] = mapped_column(primary_key=True)
     size_bytes:  Mapped[int]
     sha256:      Mapped[str]
+    version:     Mapped[str | None]  # only for 'image'; enforced 1:1 at upload — see api.md
     uploaded_at: Mapped[str]
     uploaded_by: Mapped[str | None]
 

@@ -5,16 +5,31 @@ import os
 import pytest
 
 from drawbridge.db import get_session
-from drawbridge.models import ProvisioningSession, ZTPFile
+from drawbridge.models import Device, ProvisioningSession, ZTPFile
 
 BASE = '/files'
 ROUTE_TYPE = {'images': 'image', 'configs': 'config'}
 
+_UNSET = object()
 
-def upload(client, route, filename, content=b'test content', sha256=None):
+
+def upload(client, route, filename, content=b'test content', sha256=None, version=_UNSET, replace=None):
     data = {'file': (io.BytesIO(content), filename)}
     if sha256 is not None:
         data['sha256'] = sha256
+    if route == 'images':
+        # Most tests here don't care about version resolution at all — default
+        # to the filename itself (an arbitrary but per-filename-unique string,
+        # no X.X.X format enforced server-side) so unrelated uploads never
+        # collide on the 1:1 version->image mapping. Tests that actually
+        # exercise parsing/conflict behavior pass version=None (opt out
+        # entirely) or an explicit version.
+        if version is _UNSET:
+            version = filename
+        if version is not None:
+            data['version'] = version
+    if replace is not None:
+        data['replace'] = replace
     return client.post(
         f'{BASE}/{route}',
         data=data,
@@ -202,6 +217,70 @@ def test_upload_with_malformed_sha256_returns_422(logged_in_client, route, filen
     assert response.get_json()['error'] == 'invalid_hash'
 
 
+# --- POST /files/images — version parsing / 1:1 mapping ---
+
+def test_upload_image_parses_version_from_filename(app, logged_in_client):
+    response = upload(logged_in_client, 'images', 'cat9k_iosxe.17.9.1.SPA.bin', version=None)
+    assert response.status_code == 201
+    with app.app_context():
+        f = get_session().get(ZTPFile, ('image', 'cat9k_iosxe.17.9.1.SPA.bin'))
+        assert f.version == '17.9.1'
+
+
+def test_upload_image_returns_422_when_version_unparseable_and_not_supplied(logged_in_client):
+    response = upload(logged_in_client, 'images', 'firmware.bin', version=None)
+    assert response.status_code == 422
+    assert response.get_json()['error'] == 'version_required'
+
+
+def test_upload_image_explicit_version_overrides_parsed_value(app, logged_in_client):
+    response = upload(logged_in_client, 'images', 'cat9k_iosxe.17.9.1.SPA.bin', version='99.0.0')
+    assert response.status_code == 201
+    with app.app_context():
+        f = get_session().get(ZTPFile, ('image', 'cat9k_iosxe.17.9.1.SPA.bin'))
+        assert f.version == '99.0.0'
+
+
+def test_upload_config_ignores_version_field(app, logged_in_client):
+    """Configs have no version concept — the field is silently a no-op
+    there, not an error, since the upload() helper only attaches it for
+    the images route."""
+    response = upload(logged_in_client, 'configs', 'spine.cfg')
+    assert response.status_code == 201
+    with app.app_context():
+        f = get_session().get(ZTPFile, ('config', 'spine.cfg'))
+        assert f.version is None
+
+
+def test_upload_image_returns_409_on_version_conflict(logged_in_client):
+    upload(logged_in_client, 'images', 'ios-xe-a.bin', version='17.9.1')
+    response = upload(logged_in_client, 'images', 'ios-xe-b.bin', version='17.9.1')
+    assert response.status_code == 409
+    assert response.get_json()['error'] == 'version_conflict'
+
+
+def test_upload_image_version_conflict_leaves_existing_mapping_untouched(app, logged_in_client):
+    upload(logged_in_client, 'images', 'ios-xe-a.bin', version='17.9.1')
+    upload(logged_in_client, 'images', 'ios-xe-b.bin', version='17.9.1')
+    with app.app_context():
+        assert get_session().get(ZTPFile, ('image', 'ios-xe-a.bin')) is not None
+        assert get_session().get(ZTPFile, ('image', 'ios-xe-b.bin')) is None
+
+
+def test_upload_image_replace_true_supersedes_existing_mapping(app, logged_in_client):
+    upload(logged_in_client, 'images', 'ios-xe-a.bin', version='17.9.1')
+    response = upload(logged_in_client, 'images', 'ios-xe-b.bin', version='17.9.1', replace='true')
+    assert response.status_code == 201
+
+    with app.app_context():
+        assert get_session().get(ZTPFile, ('image', 'ios-xe-a.bin')) is None
+        f = get_session().get(ZTPFile, ('image', 'ios-xe-b.bin'))
+        assert f is not None
+        assert f.version == '17.9.1'
+    assert not os.path.exists(os.path.join(app.config['FILES_PATH'], 'images', 'ios-xe-a.bin'))
+    assert os.path.isfile(os.path.join(app.config['FILES_PATH'], 'images', 'ios-xe-b.bin'))
+
+
 # --- GET /files/<type>/<filename> — serve ---
 
 def test_serve_image_is_accessible_with_active_session(app, client, logged_in_client, active_session):
@@ -311,6 +390,43 @@ def test_delete_only_removes_file_of_matching_type(app, logged_in_client):
     upload(logged_in_client, 'configs', 'spine.cfg')
     logged_in_client.delete(f'{BASE}/configs/spine.cfg')
     assert os.path.isfile(os.path.join(app.config['FILES_PATH'], 'images', 'firmware.bin'))
+
+
+# --- DELETE /files/images/<filename> — in-use warning (docs/decisions.md) ---
+
+def test_delete_image_in_use_by_allowlist_returns_409_without_confirm(app, logged_in_client):
+    upload(logged_in_client, 'images', 'firmware.bin', version='17.9.1')
+    with app.app_context():
+        session = get_session()
+        session.add(Device(serial='SN1', version='17.9.1', added_by='operator'))
+        session.commit()
+
+    response = logged_in_client.delete(f'{BASE}/images/firmware.bin')
+    assert response.status_code == 409
+    assert response.get_json()['error'] == 'image_in_use'
+
+    with app.app_context():
+        assert get_session().get(ZTPFile, ('image', 'firmware.bin')) is not None
+
+
+def test_delete_image_in_use_with_confirm_true_succeeds(app, logged_in_client):
+    upload(logged_in_client, 'images', 'firmware.bin', version='17.9.1')
+    with app.app_context():
+        session = get_session()
+        session.add(Device(serial='SN1', version='17.9.1', added_by='operator'))
+        session.commit()
+
+    response = logged_in_client.delete(f'{BASE}/images/firmware.bin?confirm=true')
+    assert response.status_code == 200
+
+    with app.app_context():
+        assert get_session().get(ZTPFile, ('image', 'firmware.bin')) is None
+
+
+def test_delete_image_not_in_use_succeeds_without_confirm(app, logged_in_client):
+    upload(logged_in_client, 'images', 'firmware.bin', version='17.9.1')
+    response = logged_in_client.delete(f'{BASE}/images/firmware.bin')
+    assert response.status_code == 200
 
 
 # --- PUT /files/<type>/<filename> — edit stored hash ---

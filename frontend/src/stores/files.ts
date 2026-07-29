@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import filesClient from '../api/filesClient'
 import { TYPE_PLURAL } from '../utils/fileTypes'
+import { ApiError } from '../types'
 import type { FileType, QueueItem, StagedFile, ZTPFile } from '../types'
 
 const CONCURRENCY = 3
@@ -10,6 +11,10 @@ interface FilesState {
   queue: QueueItem[]
   loading: boolean
   error: string | null
+  // Set alongside error from the last failed action's ApiError.code — lets
+  // callers (e.g. Files.vue's delete confirmation) branch on e.g.
+  // 'image_in_use' without parsing the message string.
+  errorCode: string | null
   _draining: boolean
 }
 
@@ -19,6 +24,7 @@ export const useFilesStore = defineStore('files', {
     queue: [],
     loading: false,
     error: null,
+    errorCode: null,
     _draining: false,
   }),
   actions: {
@@ -39,15 +45,21 @@ export const useFilesStore = defineStore('files', {
       }
     },
 
-    async remove(fileType: FileType, filename: string): Promise<boolean> {
+    // confirm=true bypasses the 409 image_in_use warning (see
+    // drawbridge/api/files.py) — an operator has already been shown the
+    // affected allowlist entries and chosen to delete anyway.
+    async remove(fileType: FileType, filename: string, confirm = false): Promise<boolean> {
       this.loading = true
       this.error = null
+      this.errorCode = null
       try {
-        await filesClient.delete(`/${TYPE_PLURAL[fileType]}/${filename}`)
+        const query = confirm ? '?confirm=true' : ''
+        await filesClient.delete(`/${TYPE_PLURAL[fileType]}/${filename}${query}`)
         await this.list()
         return true
       } catch (err) {
         this.error = (err as Error).message
+        this.errorCode = err instanceof ApiError ? err.code : null
         return false
       } finally {
         this.loading = false
@@ -56,19 +68,33 @@ export const useFilesStore = defineStore('files', {
 
     // `files` is already filtered to known types by the caller.
     enqueueAndStart(files: StagedFile[]): void {
-      for (const { file, fileType, sha256 } of files) {
+      for (const { file, fileType, sha256, version } of files) {
         this.queue.push({
           id: crypto.randomUUID(),
           file,
           fileType,
           filename: file.name,
           sha256,
+          version,
           status: 'queued',
           progress: 0,
           controller: null,
           error: null,
         })
       }
+      this._drainQueue()
+    },
+
+    // Re-queues an item that failed with a version_conflict, this time
+    // telling the backend to supersede the existing mapping — see
+    // drawbridge/api/files.py's `replace` form field.
+    retryUploadWithReplace(id: string): void {
+      const item = this.queue.find((i) => i.id === id)
+      if (!item) return
+      item.replace = true
+      item.conflict = false
+      item.error = null
+      item.status = 'queued'
       this._drainQueue()
     },
 
@@ -128,6 +154,10 @@ export const useFilesStore = defineStore('files', {
       const formData = new FormData()
       formData.append('file', item.file)
       if (item.sha256) formData.append('sha256', item.sha256)
+      if (item.fileType === 'image') {
+        if (item.version) formData.append('version', item.version)
+        if (item.replace) formData.append('replace', 'true')
+      }
       try {
         await filesClient.post(`/${TYPE_PLURAL[item.fileType]}`, formData, {
           signal: controller.signal,
@@ -143,6 +173,7 @@ export const useFilesStore = defineStore('files', {
         } else {
           item.status = 'error'
           item.error = (err as Error).message
+          item.conflict = err instanceof ApiError && err.code === 'version_conflict'
         }
       }
     },

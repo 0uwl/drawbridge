@@ -14,10 +14,13 @@ export class ApiError extends Error {
 
 // --- backend models (drawbridge/models.py as_dict() shapes) ---
 export interface Device {
+  // Literal '*' is the "allow all" wildcard entry — see docs/decisions.md.
   serial: string
   mac: string | null
   description: string | null
-  image: string | null
+  // Desired software version (X.X.X). Resolved to an image filename at
+  // /api/v1/provision-request time via a ZTPFile lookup, not stored here.
+  version: string | null
   config_file: string | null
   added_at: string
   added_by: string | null
@@ -29,6 +32,11 @@ export interface ProvisioningSession {
   ip: string | null
   image: string | null
   config_file: string | null
+  // Self-reported via PUT /provision-request/facts once the session is
+  // approved — see docs/decisions.md, "Facts-first provisioning". Null
+  // until the device reports in, and never copied onto Device.
+  model: string | null
+  version: string | null
   // Written by drawbridge/queries.py at session creation ('lease_approved')
   // and updated by drawbridge/device_events.py as vendor-specific syslog
   // triggers match (see docs/logging.md, "Multi-vendor"). Stays a loose
@@ -71,6 +79,9 @@ export interface ZTPFile {
   filename: string
   size_bytes: number
   sha256: string
+  // Only ever set for file_type='image' — parsed from the filename at
+  // upload or supplied manually, enforced 1:1 with other images.
+  version: string | null
   uploaded_at: string
   uploaded_by: string | null
 }
@@ -103,6 +114,14 @@ export interface QueueItem {
   fileType: FileType
   filename: string
   sha256?: string
+  // image only — see StagedFile.version below.
+  version?: string
+  // Set when a retry should bypass the version_conflict check and supersede
+  // the existing mapping (see stores/files.ts, retryUploadWithReplace).
+  replace?: boolean
+  // True when this item's error is a version_conflict — lets the UI offer
+  // "replace the mapping" instead of just showing a dead-end error.
+  conflict?: boolean
   status: UploadStatus
   progress: number
   controller: AbortController | null
@@ -112,11 +131,14 @@ export interface StagedFile {
   file: File
   fileType: FileType
   sha256?: string
+  // image only — operator override of the version parsed from the
+  // filename; left blank to let the backend parse it (POST /files/images).
+  version?: string
 }
 
 // --- create-payload shapes ---
 export type DeviceCreatePayload = Omit<Device, 'added_at' | 'added_by'>
-export type DeviceUpdatePayload = Pick<Device, 'mac' | 'description' | 'image' | 'config_file'>
+export type DeviceUpdatePayload = Pick<Device, 'mac' | 'description' | 'version' | 'config_file'>
 export type UserCreatePayload = Pick<AdminUser, 'username' | 'role'>
 
 // --- axios augmentation for the custom skip401Redirect request flag ---
