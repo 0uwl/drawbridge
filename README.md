@@ -92,7 +92,7 @@ read it), not `cmd2`'s (`bash`, which does — that's what actually reads
 and executes the piped `install.sh`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/v.0.3.0/install.sh | DRAWBRIDGE_REF=v.0.3.0 bash
+curl -fsSL https://raw.githubusercontent.com/0uwl/drawbridge/development/install.sh | DRAWBRIDGE_REF=development bash
 ```
 
 Run as your normal user, **not** as root or via `sudo` — the script calls

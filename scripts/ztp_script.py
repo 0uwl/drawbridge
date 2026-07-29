@@ -26,7 +26,7 @@ import sys
 import logging
 from logging.handlers import SysLogHandler
 
-# Guestshell's cli module raises cli.CLIError on a failed cli()/execute()/
+# Guestshell's cli module raises cli.IOSPCLIError on a failed cli()/execute()/
 # configurep() call, per Cisco's own Guestshell Python API docs - assumed
 # uniform across all three, unverified without real hardware (see
 # docs/decisions.md).
@@ -390,7 +390,8 @@ def _install_image(filename):
 
     report_new_state('updating_software')
     log_to_server(f'Installing image {filename}')
-    cli.execute(f'install add file flash:{filename} activate commit')
+    # TODO: Configure EEM script for installing image
+    # cli.execute(f'install add file flash:{filename} activate commit')
 
 
 def _apply_config(filename):
@@ -426,15 +427,16 @@ def wipe_device():
         *_fetched_flash_files,
     ):
         try:
-            os.remove(f'/bootflash/guest-share/{filename}')
+            if os.path.isfile(f'/bootflash/guest-share/{filename}'):
+                os.remove(f'/bootflash/guest-share/{filename}')
         except OSError as e:
-            print(f'wipe_device: could not remove {filename}: {e}')
+            LOGGER.error(f'wipe_device: could not remove {filename}: {e}')
 
     if DEVICE.is_c9200cx:
         try:
             cli.configurep(f'no crypto pki trustpoint {TRUSTPOINT_NAME}')
-        except cli.CLIError as e:
-            print(f'wipe_device: could not remove trustpoint {TRUSTPOINT_NAME}: {e}')
+        except cli.IOSPCLIError as e:
+            LOGGER.error(f'wipe_device: could not remove trustpoint {TRUSTPOINT_NAME}: {e}')
 
 
 def main():
@@ -442,7 +444,7 @@ def main():
 
     try:
         model, serial, version, ip, mac = _get_device_info()
-    except cli.CLIError as e:
+    except cli.IOSPCLIError as e:
         # Nothing set up yet to log to (LOGGER/DEVICE don't exist) - this is
         # as fatal and as early as a failure can get.
         print(f'Fatal CLI error while reading device info: {e}')
@@ -484,7 +486,7 @@ def main():
         report_complete(payload)
         log_to_server('Provisioning complete')
 
-    except cli.CLIError as e:
+    except cli.IOSPCLIError as e:
         # Catches any fatal CLI failure from this point on (trustpoint
         # setup, image install, config apply, ...) - log the exact error
         # and still try to tell Drawbridge this run failed, rather than
