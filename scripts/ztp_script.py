@@ -26,10 +26,6 @@ import sys
 import logging
 from logging.handlers import SysLogHandler
 
-# Guestshell's cli module raises cli.IOSPCLIError on a failed cli()/execute()/
-# configurep() call, per Cisco's own Guestshell Python API docs - assumed
-# uniform across all three, unverified without real hardware (see
-# docs/decisions.md).
 import cli # type: ignore
 
 # Must match the host/port devices reach Drawbridge on (see Option 67 in
@@ -307,13 +303,8 @@ def _put_json(url, payload, filename):
 
 
 def report_new_state(state):
-    """Reports new provisioning state to Drawbridge - applied directly to
-    the active ProvisioningSession, skipping the syslog pattern-matching
-    Drawbridge otherwise runs incoming messages through (see
-    drawbridge/device_events.py and docs/api.md's PUT /device-logs
-    contract). `message` is still required by that endpoint's body shape
-    even though `state` is what actually matters here.
-
+    """Reports new provisioning state to Drawbridge. 
+    
     Args:
         state (str): One of drawbridge.models.PROVISIONING_STATES
     """
@@ -333,15 +324,11 @@ def report_complete(payload):
 
 
 def report_device_facts():
-    """Reports the device's own facts (model, version, mac, ip - see
-    Device.to_dict()) to Drawbridge so they can be recorded on the active
-    ProvisioningSession row (see docs/decisions.md, "Facts-first
-    provisioning"). Only meaningful once a session exists, so this is called
-    from main() after request_provisioning() has already approved the
-    device - never before. Same _put_json transport as report_complete/
-    log_to_server: on C9200CX, Guestshell can't attach a request body to a
-    direct call, so the payload is written to flash and delivered via IOS
-    XE's own 'copy' primitive issuing the PUT; other platforms PUT directly.
+    """Reports the device's own facts (model, version, mac, ip) 
+    to Drawbridge so they can be recorded on the active
+    ProvisioningSession row. Only meaningful once a session exists, 
+    so this is called from main() after request_provisioning() has already 
+    approved the device.
     """
     url = f'{DRAWBRIDGE_BASE_URL}/provision-request/facts'
     _put_json(url, DEVICE.to_dict(), FACTS_FILENAME)
@@ -355,9 +342,6 @@ def log_to_server(message):
     _put_json(url, {'serial': DEVICE.serial, 'message': message}, 'devicelog.json')
 
 
-# Flash filenames fetched this run - wipe_device() removes exactly these,
-# never a wildcard directory clean, so a failed/partial run can't delete
-# something it didn't itself put there.
 _fetched_flash_files = []
 
 
@@ -420,7 +404,7 @@ def wipe_device():
     trustpoint that was never installed) doesn't skip the rest.
     """
     if 'DEVICE' not in globals():
-        return  # failed before Device info could even be read - nothing was written yet
+        return  # script failed before Device info could even be read - nothing was written yet
 
     for filename in (
         PROVISION_REQUEST_FILENAME, STATUS_FILENAME, FACTS_FILENAME, STATE_FILENAME, 'devicelog.json',
@@ -438,6 +422,9 @@ def wipe_device():
         except cli.IOSPCLIError as e:
             LOGGER.error(f'wipe_device: could not remove trustpoint {TRUSTPOINT_NAME}: {e}')
 
+    # TODO: Wipe configuration with an EEM script
+    # TODO: Reload device with an EEM script
+    
 
 def main():
     global LOGGER, DEVICE
@@ -473,8 +460,8 @@ def main():
         if decision is None or not approved:
             return  # denied or unreachable - exit cleanly, no completion callback
 
+        log_to_server('Reporting device facts to Drawbridge')
         report_device_facts()
-        log_to_server('Reported device facts to Drawbridge')
 
         assigned = decision.get('payload') or {}
         if assigned.get('image'):
@@ -505,8 +492,7 @@ def main():
             log_to_server(f'Failed to report failure to Drawbridge: {report_err}')
 
     finally:
-        # Always runs last, regardless of outcome - see wipe_device()'s
-        # own docstring.
+        # Always runs last, regardless of outcome
         wipe_device()
 
 
